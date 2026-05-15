@@ -8,6 +8,7 @@ KuroStream is an anime streaming web app prototype with a Node.js backend.
 - Jikan API integration for anime metadata
 - AnimePahe proxy integration for stream source lookup
 - Continue Watching + My List persistence via Dexie.js (IndexedDB)
+- Supabase Auth login/register + cross-device sync for My List and Continue Watching
 - Health/readiness/liveness endpoints for deployment checks
 - Rate limiting, CORS controls, structured request logging
 
@@ -30,7 +31,8 @@ KuroStream is an anime streaming web app prototype with a Node.js backend.
 
 Notes:
 - `GET /api/home` returns `featured`, `trending`, and `latest`.
-- Continue Watching and My List are client-side user state (Dexie), not API-seeded data.
+- Continue Watching and My List are cached locally in Dexie.
+- If user is logged in, those states are synced to Supabase per account (cross-device).
 
 ## Local Run
 
@@ -67,6 +69,13 @@ Optional envs:
 - `JIKAN_BASE`
 - `JIKAN_CACHE_TTL_MS`
 - `JIKAN_CACHE_MAX_SIZE`
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+
+Security note:
+- Do not hardcode Supabase keys in frontend source.
+- Frontend reads config from `/api/config` (server env) or manual input on `login.html`.
+- Never commit service_role keys.
 
 ## Legacy Render Files
 

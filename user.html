@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KuroStream — User</title>
+<link rel="stylesheet" href="css/styles.css">
+<script src="https://cdn.jsdelivr.net/npm/dexie@4/dist/dexie.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script defer src="js/components.js"></script>
+<script defer src="js/auth.js"></script>
+<script defer src="js/app.js"></script>
+</head><body>
+<main class="app-shell"><header class="topbar"><div class="brand">Kuro<span>Stream</span></div>
+<nav class="nav"><a href="home.html">Home</a><a href="explore.html">Explore</a><a href="my-list.html">My List</a><a href="user.html">User</a><a id="auth-badge" href="login.html">Login</a></nav>
+<label class="search"><span>🔎</span><input id="global-search" placeholder="Search anime..."></label></header>
+<section class="section card"><div class="card-body"><h1 class="page-title">User Account</h1>
+<p id="user-email" class="muted">Not logged in</p><div class="row"><button id="sync-btn" class="btn">Sync now</button><button id="logout-btn" class="btn">Logout</button></div>
+<p id="status" class="muted"></p></div></section></main>
+<div id="modal" class="modal-backdrop"></div>
+<script>
+document.addEventListener('DOMContentLoaded', async ()=>{
+  const status = UI.el('#status');
+  const user = await Auth.getUser();
+  if(!user){ location.href='login.html'; return; }
+  UI.el('#user-email').textContent = user.email || user.id;
+  await Auth.initAuthBadge();
+  UI.el('#sync-btn').onclick = async ()=>{ try{ status.textContent='Syncing...'; await Auth.syncCurrentUserData(); status.textContent='Sync selesai.'; }catch(e){ status.textContent=e.message||'Sync gagal'; } };
+  UI.el('#logout-btn').onclick = async ()=>{ await Auth.signOut(); location.href='login.html'; };
+});
+</script>
+</body></html>

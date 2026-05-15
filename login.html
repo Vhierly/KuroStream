@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KuroStream — Login</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/dexie@4/dist/dexie.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script defer src="js/components.js"></script>
+  <script defer src="js/auth.js"></script>
+  <script defer src="js/app.js"></script>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand">Kuro<span>Stream</span></div>
+      <nav class="nav">
+        <a href="home.html">Home</a><a href="explore.html">Explore</a><a href="my-list.html">My List</a><a href="login.html">Login</a><a id="auth-badge" href="login.html">Login</a>
+      </nav>
+      <label class="search"><span>🔎</span><input id="global-search" placeholder="Search anime..."></label>
+    </header>
+    <section class="section card"><div class="card-body">
+      <h1 class="page-title">Login / Register</h1>
+      <p class="muted">Isi Supabase URL + anon key sekali, lalu login.</p>
+      <input id="supabase-url" class="input" placeholder="https://xxxxx.supabase.co">
+      <input id="supabase-key" class="input" placeholder="Supabase anon key">
+      <input id="email" class="input" placeholder="Email">
+      <input id="password" type="password" class="input" placeholder="Password (min 6)">
+      <div class="row">
+        <button id="save-config" class="btn">Save Config</button>
+        <button id="login-btn" class="btn primary">Login</button>
+        <button id="register-btn" class="btn">Register</button>
+      </div>
+      <p id="status" class="muted"></p>
+    </div></section>
+  </main>
+  <div id="modal" class="modal-backdrop"></div>
+  <script>
+    document.addEventListener('DOMContentLoaded', async () => {
+      const cfg = Auth.getConfig();
+      UI.el('#supabase-url').value = cfg.url || '';
+      UI.el('#supabase-key').value = cfg.anonKey || '';
+      const setStatus = (msg) => UI.el('#status').textContent = msg;
+
+      UI.el('#save-config').onclick = () => {
+        Auth.setConfig(UI.el('#supabase-url').value, UI.el('#supabase-key').value);
+        setStatus('Config tersimpan.');
+      };
+
+      UI.el('#register-btn').onclick = async () => {
+        try {
+          Auth.setConfig(UI.el('#supabase-url').value, UI.el('#supabase-key').value);
+          await Auth.signUp(UI.el('#email').value.trim(), UI.el('#password').value);
+          setStatus('Register sukses. Cek email kalau diminta verifikasi, lalu login.');
+        } catch (e) { setStatus(e.message || 'Register gagal'); }
+      };
+
+      UI.el('#login-btn').onclick = async () => {
+        try {
+          Auth.setConfig(UI.el('#supabase-url').value, UI.el('#supabase-key').value);
+          await Auth.signIn(UI.el('#email').value.trim(), UI.el('#password').value);
+          location.href = 'user.html';
+        } catch (e) { setStatus(e.message || 'Login gagal'); }
+      };
+
+      await Auth.initAuthBadge();
+    });
+  </script>
+</body>
+</html>

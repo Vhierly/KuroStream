@@ -81,6 +81,11 @@ window.UI = (() => {
     return initPromise;
   };
 
+  const maybeSyncToCloud = async () => {
+    if (!window.Auth?.syncCurrentUserData) return;
+    try { await window.Auth.syncCurrentUserData(); } catch (_e) {}
+  };
+
   const saveMyList = async (items) => {
     await initStorage();
     const list = Array.isArray(items) ? items : [];
@@ -93,6 +98,7 @@ window.UI = (() => {
         .map((x, idx) => ({ ...x, id: Number(x.id), updatedAt: now - idx }));
       if (rows.length) await db.myList.bulkPut(rows);
     });
+    await maybeSyncToCloud();
   };
 
   const loadMyList = async () => {
@@ -114,6 +120,7 @@ window.UI = (() => {
     const exists = await db.myList.get(id);
     if (exists) {
       await db.myList.delete(id);
+      await maybeSyncToCloud();
       return false;
     }
 
@@ -124,6 +131,7 @@ window.UI = (() => {
     }
 
     await db.myList.put({ ...anime, id, updatedAt: Date.now() });
+    await maybeSyncToCloud();
     return true;
   };
 
@@ -150,6 +158,7 @@ window.UI = (() => {
         }));
       if (payload.length) await db.continueWatching.bulkPut(payload);
     });
+    await maybeSyncToCloud();
   };
 
   const updateContinueWatching = async (entry) => {
@@ -165,6 +174,29 @@ window.UI = (() => {
       progress: Number(entry.progress || 0),
       updatedAt: Date.now()
     });
+    await maybeSyncToCloud();
+  };
+
+  const replaceLocalData = async ({ myList = [], continueWatching = [] }) => {
+    await initStorage();
+    await db.transaction('rw', db.myList, db.continueWatching, async () => {
+      await db.myList.clear();
+      await db.continueWatching.clear();
+      if (Array.isArray(myList) && myList.length) {
+        await db.myList.bulkPut(myList.slice(0, 60).map((x) => ({ ...x, id: Number(x.id), updatedAt: Number(x.updatedAt || Date.now()) })));
+      }
+      if (Array.isArray(continueWatching) && continueWatching.length) {
+        await db.continueWatching.bulkPut(continueWatching.slice(0, 24).map((x) => ({ ...x, id: Number(x.id), updatedAt: Number(x.updatedAt || Date.now()), ep: Number(x.ep || 1), progress: Number(x.progress || 0) })));
+      }
+    });
+  };
+
+  const exportLocalData = async () => {
+    await initStorage();
+    return {
+      myList: await db.myList.orderBy('updatedAt').reverse().toArray(),
+      continueWatching: await db.continueWatching.orderBy('updatedAt').reverse().limit(24).toArray()
+    };
   };
 
   const getSetting = async (key, fallback = null) => {
@@ -232,6 +264,8 @@ window.UI = (() => {
     loadContinueWatching,
     saveContinueWatching,
     updateContinueWatching,
+    exportLocalData,
+    replaceLocalData,
     getSetting,
     setSetting,
     escapeHtml
