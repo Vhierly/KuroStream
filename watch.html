@@ -184,6 +184,37 @@
         }
 
         if (selected?.embed) {
+          const isYouTubeEmbed = /youtube\.com\/embed|youtube-nocookie\.com\/embed/i.test(String(selected.embed));
+
+          if (isYouTubeEmbed) {
+            let openUrl = String(selected.embed);
+            if (openUrl.includes('listType=search') && openUrl.includes('list=')) {
+              const q = decodeURIComponent(openUrl.split('list=')[1] || '').replace(/\+/g, ' ');
+              openUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+            } else {
+              openUrl = openUrl
+                .replace('youtube.com/embed/', 'youtube.com/watch?v=')
+                .replace('youtube-nocookie.com/embed/', 'youtube.com/watch?v=');
+            }
+
+            screen.innerHTML = `
+              <div class="card" style="max-width:720px;margin:0 auto;">
+                <div class="card-body" style="text-align:center;">
+                  <h3>Trailer fallback</h3>
+                  <p class="muted">YouTube kadang blokir pemutaran embed (Error 153). Buka trailer langsung di YouTube.</p>
+                  <button class="btn primary" id="open-youtube-trailer">Open on YouTube</button>
+                </div>
+              </div>
+            `;
+
+            const openBtn = UI.el('#open-youtube-trailer');
+            if (openBtn) {
+              openBtn.onclick = () => window.open(openUrl, '_blank', 'noopener,noreferrer');
+            }
+            saveRealtimeProgress(5);
+            return;
+          }
+
           screen.innerHTML = `
             <iframe
               id="embed-player"
