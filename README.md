@@ -47,17 +47,26 @@ npm run lint
 npm test
 ```
 
-## Deploy (Render)
+## Deploy (Vercel Fullstack)
 
-Backend includes:
+This repo is ready for full Vercel deployment:
 
-- `backend/render.yaml`
-- `backend/Dockerfile`
-- `backend/Procfile`
+- Frontend: static HTML/CSS/JS from project root
+- API: serverless function at `api/[...route].js`
 
-Set required env in Render:
+Required Vercel environment variable:
 
-- `ANIMEPAHE_PROXY_BASE`
+- `ANIMEPAHE_PROXY_BASE` (example: `https://your-proxy-domain/api`)
+
+Optional envs:
+
+- `JIKAN_BASE`
+- `JIKAN_CACHE_TTL_MS`
+- `JIKAN_CACHE_MAX_SIZE`
+
+## Legacy Render Files
+
+Render artifacts are still present in `backend/` if you need fallback deploy there.
 
 ## Notes
 
