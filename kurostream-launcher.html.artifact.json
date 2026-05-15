@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "KuroStream Frontend Launcher (index.html)",
+  "entry": "kurostream-launcher.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-05-14T11:23:29.982Z",
+  "updatedAt": "2026-05-14T11:25:30.551Z",
+  "sourceSkillId": "agent-browser",
+  "designSystemId": "default",
+  "metadata": {
+    "identifier": "kurostream-launcher",
+    "artifactType": "text/html",
+    "inferred": false
+  }
+}

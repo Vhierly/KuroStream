@@ -1,0 +1,17 @@
+{
+  "name": "kurostream-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "lint": "node --check server.js",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "express-rate-limit": "^7.5.1"
+  }
+}

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KuroStream — Screen Launcher</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <script defer src="js/app.js"></script>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand">Kuro<span>Stream</span></div>
+      <nav class="nav">
+        <a href="home.html">Home</a>
+        <a href="explore.html">Explore</a>
+        <a href="detail.html">Details</a>
+        <a href="watch.html">Watch</a>
+        <a href="my-list.html">My List</a>
+      </nav>
+      <label class="search">
+        <span>🔎</span>
+        <input id="global-search" placeholder="Search anime...">
+      </label>
+    </header>
+
+    <section class="page-header">
+      <div>
+        <h1 class="page-title">KuroStream Frontend</h1>
+        <p class="page-subtitle">Open each screen to review complete UI flows and responsive behavior.</p>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="grid cards-5">
+        <a class="card" href="home.html">
+          <div class="poster">Home</div>
+          <div class="card-body">
+            <p class="title">Home Page</p>
+            <p class="meta"><span>Hero, trending, latest, continue watching</span></p>
+          </div>
+        </a>
+
+        <a class="card" href="explore.html">
+          <div class="poster">Explore</div>
+          <div class="card-body">
+            <p class="title">Catalog / Explore</p>
+            <p class="meta"><span>Search, filter, sort, pagination</span></p>
+          </div>
+        </a>
+
+        <a class="card" href="detail.html">
+          <div class="poster">Details</div>
+          <div class="card-body">
+            <p class="title">Anime Details</p>
+            <p class="meta"><span>Metadata, synopsis, episodes, actions</span></p>
+          </div>
+        </a>
+
+        <a class="card" href="watch.html">
+          <div class="poster">Watch</div>
+          <div class="card-body">
+            <p class="title">Watch Page</p>
+            <p class="meta"><span>Player layout, next/prev, auto-next</span></p>
+          </div>
+        </a>
+
+        <a class="card" href="my-list.html">
+          <div class="poster">My List</div>
+          <div class="card-body">
+            <p class="title">Bookmark List</p>
+            <p class="meta"><span>Saved items with watching states</span></p>
+          </div>
+        </a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

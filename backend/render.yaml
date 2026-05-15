@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: kurostream-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    rootDir: .
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 8787
+      - key: ANIMEPAHE_PROXY_BASE
+        sync: false

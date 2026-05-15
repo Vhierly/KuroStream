@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KuroStream — Watch</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <script defer src="js/mock-data.js"></script>
+  <script defer src="js/api.js"></script>
+  <script defer src="js/components.js"></script>
+  <script defer src="js/app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand">Kuro<span>Stream</span></div>
+      <nav class="nav">
+        <a href="home.html">Home</a>
+        <a href="explore.html">Explore</a>
+        <a href="detail.html">Details</a>
+        <a href="watch.html">Watch</a>
+        <a href="my-list.html">My List</a>
+      </nav>
+      <label class="search">
+        <span>🔎</span>
+        <input id="global-search" placeholder="Search anime...">
+      </label>
+    </header>
+
+    <section class="page-header">
+      <h1 class="page-title" id="watch-title">Now Playing</h1>
+    </section>
+
+    <section class="split-watch">
+      <article class="player">
+        <div class="player-screen">
+          <button class="btn primary" id="play-toggle">▶ Play</button>
+        </div>
+        <div class="player-controls">
+          <div class="row">
+            <button class="btn" id="prev-ep">⏮ Previous</button>
+            <button class="btn" id="next-ep">Next ⏭</button>
+            <select id="quality-select" class="select quality-select">
+              <option value="0">Auto quality</option>
+            </select>
+          </div>
+          <div class="row">
+            <span class="muted">Auto-next</span>
+            <div class="switch" id="auto-next"></div>
+          </div>
+        </div>
+      </article>
+
+      <aside class="card">
+        <div class="card-body">
+          <h3>Episode List</h3>
+          <div id="ep-list" class="list"></div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="section">
+      <h2>Related / Recommended</h2>
+      <div id="related" class="grid cards-5"></div>
+    </section>
+  </main>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", async () => {
+      const esc = UI.escapeHtml;
+      const saved = localStorage.getItem("autonext") === "1";
+      const autoSwitch = UI.el("#auto-next");
+      const qualitySelect = UI.el("#quality-select");
+      if (saved) autoSwitch.classList.add("on");
+
+      autoSwitch.onclick = () => {
+        autoSwitch.classList.toggle("on");
+        localStorage.setItem("autonext", autoSwitch.classList.contains("on") ? "1" : "0");
+      };
+
+      window.addEventListener('beforeunload', () => {
+        saveRealtimeProgress();
+        if (progressTimer) clearInterval(progressTimer);
+      });
+
+      const query = new URLSearchParams(location.search);
+      const animeId = Number(query.get("id") || 20);
+      let episode = Number(query.get("ep") || 1);
+      let watch = null;
+      let hls = null;
+      let selectedQualityIndex = 0;
+      let progressTimer = null;
+      let shouldAutoPlayAfterLoad = false;
+      let autoNextTriggered = false;
+
+      const saveRealtimeProgress = (percentOverride = null) => {
+        if (!watch?.anime?.id) return;
+        let progress = Number(percentOverride);
+        const video = UI.el("#video-player");
+        if (!Number.isFinite(progress)) {
+          if (video && Number(video.duration) > 0) {
+            progress = Math.round((video.currentTime / video.duration) * 100);
+          } else {
+            progress = 0;
+          }
+        }
+        progress = Math.max(0, Math.min(100, progress));
+
+        UI.updateContinueWatching({
+          id: watch.anime.id,
+          title: watch.anime.title,
+          image: watch.anime.image || null,
+          ep: episode,
+          progress
+        });
+      };
+
+      const playCurrentEpisode = async () => {
+        await loadWatch();
+        history.replaceState({}, '', `watch.html?id=${animeId}&ep=${episode}`);
+      };
+
+      const bindAutoNext = () => {
+        const video = UI.el("#video-player");
+        if (!video) return;
+
+        autoNextTriggered = false;
+
+        if (progressTimer) {
+          clearInterval(progressTimer);
+          progressTimer = null;
+        }
+
+        const goNextEpisode = async () => {
+          if (autoNextTriggered) return;
+          autoNextTriggered = true;
+
+          saveRealtimeProgress(100);
+          if (!autoSwitch.classList.contains('on')) return;
+
+          const prevEpisode = episode;
+          shouldAutoPlayAfterLoad = true;
+          episode += 1;
+
+          try {
+            await playCurrentEpisode();
+          } catch (_error) {
+            // Kalau episode berikutnya tidak tersedia, balik ke episode lama.
+            episode = prevEpisode;
+            shouldAutoPlayAfterLoad = false;
+          }
+        };
+
+        video.addEventListener('timeupdate', async () => {
+          saveRealtimeProgress();
+
+          // Fallback: beberapa stream HLS tidak selalu trigger `ended`.
+          const duration = Number(video.duration);
+          const currentTime = Number(video.currentTime);
+          if (!autoNextTriggered && Number.isFinite(duration) && duration > 0 && (duration - currentTime) <= 0.35) {
+            await goNextEpisode();
+          }
+        });
+
+        progressTimer = setInterval(() => saveRealtimeProgress(), 5000);
+        video.onended = goNextEpisode;
+      };
+
+      const applySource = (sourceIndex = 0) => {
+        const screen = UI.el(".player-screen");
+        const sources = watch?.streamProvider?.sources || [];
+        const selected = sources[sourceIndex] || sources[0];
+        selectedQualityIndex = sourceIndex;
+
+        if (hls) {
+          hls.destroy();
+          hls = null;
+        }
+
+        if (!selected?.url && !selected?.embed) {
+          screen.innerHTML = `<div class="muted">${watch?.streamProvider?.note || 'Source belum tersedia.'}</div>`;
+          return;
+        }
+
+        if (selected?.embed) {
+          screen.innerHTML = `
+            <iframe
+              id="embed-player"
+              class="embed-player"
+              src="${selected.embed}"
+              allowfullscreen
+              referrerpolicy="no-referrer"
+              loading="lazy"
+            ></iframe>
+          `;
+          saveRealtimeProgress(5);
+          return;
+        }
+
+        screen.innerHTML = `<video id="video-player" controls playsinline></video>`;
+        const video = UI.el("#video-player");
+
+        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          video.src = selected.url;
+        } else if (window.Hls?.isSupported()) {
+          hls = new Hls();
+          hls.loadSource(selected.url);
+          hls.attachMedia(video);
+        } else {
+          screen.innerHTML = `<div class="muted">Browser tidak mendukung HLS playback.</div>`;
+          return;
+        }
+
+        bindAutoNext();
+
+        if (shouldAutoPlayAfterLoad) {
+          const attemptPlay = async () => {
+            try {
+              await video.play();
+            } catch (_error) {
+              // Autoplay can be blocked by browser policy; keep manual play as fallback.
+            } finally {
+              shouldAutoPlayAfterLoad = false;
+            }
+          };
+
+          if (hls) {
+            hls.once(Hls.Events.MANIFEST_PARSED, () => {
+              attemptPlay();
+            });
+          } else {
+            video.addEventListener('loadedmetadata', () => {
+              attemptPlay();
+            }, { once: true });
+          }
+        }
+      };
+
+      const renderQualityOptions = () => {
+        const sources = watch?.streamProvider?.sources || [];
+        if (!sources.length) {
+          qualitySelect.innerHTML = `<option value="0">No quality available</option>`;
+          qualitySelect.disabled = true;
+          return;
+        }
+
+        qualitySelect.disabled = false;
+        qualitySelect.innerHTML = sources
+          .map((s, idx) => {
+            const label = /^\d+$/.test(String(s.resolution || '')) ? `${s.resolution}p` : (s.resolution || `Quality ${idx + 1}`);
+            return `<option value="${idx}">${esc(label)} • ${esc(s.fanSub || 'sub')}</option>`;
+          })
+          .join('');
+        qualitySelect.value = String(Math.min(selectedQualityIndex, sources.length - 1));
+      };
+
+      const loadWatch = async () => {
+        watch = await ApiClient.getWatchContext(animeId, episode);
+        UI.el("#watch-title").textContent = `${watch.anime.title} — Streaming`;
+
+        UI.el("#related").innerHTML = watch.related.map(UI.card).join("");
+        UI.attachCardNavigation("#related");
+
+        const episodeThumb = watch?.anime?.image ? String(watch.anime.image).replace(/'/g, "%27") : '';
+        UI.el("#ep-list").innerHTML = watch.episodes.map((item) => `
+          <article class="list-item">
+            <div class="thumb ${episodeThumb ? 'thumb-image' : ''}" ${episodeThumb ? `style="background-image:url('${episodeThumb}')"` : ''}></div>
+            <div>
+              <p class="title">E${esc(item.num)}: ${esc(item.title)}</p>
+              <p class="meta"><span>${esc(item.duration)}</span></p>
+            </div>
+            <button class="btn" data-ep="${item.num}">Play</button>
+          </article>
+        `).join("");
+
+        document.querySelectorAll("[data-ep]").forEach((button) => {
+          button.onclick = async () => {
+            saveRealtimeProgress();
+            episode = Number(button.dataset.ep);
+            await playCurrentEpisode();
+          };
+        });
+
+        saveRealtimeProgress();
+        renderQualityOptions();
+        applySource(Math.min(selectedQualityIndex, (watch?.streamProvider?.sources || []).length - 1));
+      };
+
+      qualitySelect.onchange = () => {
+        selectedQualityIndex = Number(qualitySelect.value || 0);
+        applySource(selectedQualityIndex);
+      };
+
+      UI.el("#prev-ep").onclick = async () => {
+        saveRealtimeProgress();
+        episode = Math.max(1, episode - 1);
+        await playCurrentEpisode();
+      };
+
+      UI.el("#next-ep").onclick = async () => {
+        saveRealtimeProgress();
+        episode = Math.min(watch.episodes.length, episode + 1);
+        await playCurrentEpisode();
+      };
+
+      UI.el("#play-toggle").onclick = () => {
+        const iframe = UI.el("#embed-player");
+        if (iframe) {
+          window.open(iframe.src, '_blank', 'noopener,noreferrer');
+          return;
+        }
+
+        const video = UI.el("#video-player");
+        if (!video) return;
+        if (video.paused) video.play();
+        else video.pause();
+      };
+
+      try {
+        await loadWatch();
+      } catch (error) {
+        UI.openModal("Error", error.message || "Gagal load halaman watch");
+      }
+    });
+  </script>
+</body>
+</html>

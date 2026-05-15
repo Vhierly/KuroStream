@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KuroStream — Home</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <script defer src="js/mock-data.js"></script>
+  <script defer src="js/api.js"></script>
+  <script defer src="js/components.js"></script>
+  <script defer src="js/app.js"></script>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand">Kuro<span>Stream</span></div>
+      <nav class="nav">
+        <a href="home.html">Home</a>
+        <a href="explore.html">Explore</a>
+        <a href="detail.html">Details</a>
+        <a href="watch.html">Watch</a>
+        <a href="my-list.html">My List</a>
+      </nav>
+      <label class="search">
+        <span>🔎</span>
+        <input id="global-search" placeholder="Search anime...">
+      </label>
+    </header>
+
+    <section class="hero" id="hero">
+      <div class="hero-overlay"></div>
+      <div class="hero-content">
+        <div class="row">
+          <span class="badge">Featured</span>
+          <span class="badge">Editor's Pick</span>
+        </div>
+        <h1 id="hero-title">Loading title...</h1>
+        <p class="page-subtitle" id="hero-subtitle"></p>
+        <div class="row" id="hero-meta"></div>
+        <div class="row">
+          <button class="btn primary">▶ Watch Now</button>
+          <button class="btn">＋ Add to My List</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="page-header">
+        <h2>Trending Now</h2>
+      </div>
+      <div id="trending" class="grid cards-5"></div>
+    </section>
+
+    <section class="section">
+      <div class="page-header">
+        <h2>Latest Episodes</h2>
+      </div>
+      <div id="latest" class="list"></div>
+    </section>
+
+    <section class="section">
+      <div class="page-header">
+        <h2>Continue Watching</h2>
+      </div>
+      <div id="continue" class="grid cards-4"></div>
+    </section>
+
+    <p class="footer-note">Frontend prototype only. Connect backend endpoints through <code>js/api.js</code>.</p>
+  </main>
+
+  <div id="modal" class="modal-backdrop"></div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", async () => {
+      const esc = UI.escapeHtml;
+      try {
+        const data = await ApiClient.getHome();
+
+        const trendingFirstWithImage = data.trending?.find((a) => a?.image) || data.trending?.[0] || null;
+        const heroAnime = data.featured?.image
+          ? {
+              id: data.featured.id,
+              title: data.featured.title,
+              subtitle: data.featured.subtitle,
+              genres: data.featured.genres,
+              rating: data.featured.rating,
+              year: data.featured.year,
+              image: data.featured.image
+            }
+          : (trendingFirstWithImage
+              ? {
+                  ...trendingFirstWithImage,
+                  subtitle: trendingFirstWithImage.synopsis || 'No synopsis available.'
+                }
+              : null);
+
+        if (heroAnime) {
+          UI.el("#hero-title").textContent = heroAnime.title || 'Featured Anime';
+          UI.el("#hero-subtitle").textContent = heroAnime.subtitle || 'No synopsis available.';
+          UI.el("#hero-meta").innerHTML = [
+            ...((heroAnime.genres || []).slice(0, 3)).map((genre) => `<span class="badge">${esc(genre)}</span>`),
+            `<span class="badge">⭐ ${esc(heroAnime.rating || '-')}</span>`,
+            `<span class="badge">${esc(heroAnime.year || '-')}</span>`
+          ].join("");
+
+          const heroEl = UI.el("#hero");
+          if (heroAnime.image && heroEl) {
+            const safeUrl = String(heroAnime.image).replace(/'/g, "%27");
+            heroEl.style.backgroundImage = `linear-gradient(180deg, rgba(5,8,18,.2) 12%, rgba(5,8,18,.9) 85%), url('${safeUrl}')`;
+            heroEl.classList.add('hero-has-image');
+          }
+
+          const watchBtn = document.querySelector(".hero .btn.primary");
+          const addBtn = document.querySelector(".hero .btn:not(.primary)");
+          if (heroAnime.id && watchBtn) watchBtn.onclick = () => location.href = `watch.html?id=${heroAnime.id}&ep=1`;
+          if (heroAnime.id && addBtn) {
+            addBtn.onclick = () => {
+              const saved = UI.toggleMyList(heroAnime);
+              UI.openModal(saved ? "Added" : "Removed", saved ? "Anime ditambahkan ke My List." : "Anime dihapus dari My List.");
+            };
+          }
+        }
+
+        UI.el("#trending").innerHTML = data.trending.map(UI.card).join("");
+        UI.attachCardNavigation("#trending");
+
+        UI.el("#latest").innerHTML = data.latest.map((row) => `
+          <article class="list-item">
+            <div class="thumb ${row.image ? 'thumb-image' : ''}" ${row.image ? `style="background-image:url('${String(row.image).replace(/'/g, "%27")}')"` : ''}></div>
+            <div>
+              <p class="title">${esc(row.anime)} — ${esc(row.ep)}</p>
+              <p class="meta"><span>Released ${esc(row.time)}</span></p>
+            </div>
+            <button class="btn" data-watch-id="${row.id}" data-watch-ep="${row.epNum || 1}">Watch</button>
+          </article>
+        `).join("");
+
+        document.querySelectorAll("[data-watch-id]").forEach((btn) => {
+          btn.onclick = () => {
+            const id = Number(btn.dataset.watchId);
+            const ep = Number(btn.dataset.watchEp || 1);
+            location.href = `watch.html?id=${id}&ep=${ep}`;
+          };
+        });
+
+        const localContinue = UI.loadContinueWatching();
+        const localById = new Map(localContinue.map((x) => [Number(x.id), x]));
+        const mergedContinue = [
+          ...localContinue,
+          ...data.continueWatching.filter((x) => !localById.has(Number(x.id)))
+        ].slice(0, 8).map((row) => {
+          const fallback = data.trending.find((a) => Number(a.id) === Number(row.id));
+          return {
+            ...row,
+            title: row.title || fallback?.title || 'Untitled Anime',
+            image: row.image || fallback?.image || null,
+            ep: Number(row.ep || 1),
+            progress: Number(row.progress || 0)
+          };
+        });
+
+        UI.el("#continue").innerHTML = mergedContinue.map((row) => `
+          <article class="card card-link" data-id="${row.id}" data-ep="${row.ep}">
+            <div class="poster ${row.image ? 'poster-image' : ''}" ${row.image ? `style="background-image:url('${String(row.image).replace(/'/g, "%27")}')"` : ''}>Continue • Episode ${row.ep}</div>
+            <div class="card-body">
+              <p class="title">${esc(row.title)}</p>
+              <div class="progress"><i style="width:${row.progress || 0}%"></i></div>
+              <p class="meta"><span>${esc(row.progress || 0)}% watched</span></p>
+            </div>
+          </article>
+        `).join("");
+
+        document.querySelectorAll("#continue .card-link").forEach((node) => {
+          node.onclick = () => location.href = `watch.html?id=${node.dataset.id}&ep=${node.dataset.ep}`;
+        });
+      } catch (error) {
+        UI.openModal("Error", error.message || "Gagal load data home.");
+      }
+    });
+  </script>
+</body>
+</html>
