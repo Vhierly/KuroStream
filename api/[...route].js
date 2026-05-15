@@ -189,6 +189,13 @@ module.exports = async (req, res) => {
       return json(res, response.status, body);
     }
 
+    if (path === '/config') {
+      return json(res, 200, {
+        supabaseUrl: process.env.SUPABASE_URL || '',
+        supabaseAnonKey: process.env.SUPABASE_ANON_KEY || ''
+      });
+    }
+
     if (path === '/live') {
       return json(res, 200, { ok: true, uptimeSec: Math.floor(process.uptime()) });
     }
