@@ -3,6 +3,8 @@ const ANIMEPAHE_PROXY_BASE = process.env.ANIMEPAHE_PROXY_BASE || '';
 const KURO_BACKEND_BASE = process.env.KURO_BACKEND_BASE || '';
 const JIKAN_CACHE_TTL_MS = Number(process.env.JIKAN_CACHE_TTL_MS || 120000);
 const JIKAN_CACHE_MAX_SIZE = Math.max(20, Number(process.env.JIKAN_CACHE_MAX_SIZE || 300));
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 
 const jikanCache = global.__kuroJikanCache || new Map();
 global.__kuroJikanCache = jikanCache;
@@ -57,6 +59,71 @@ function mapAnime(item = {}) {
     status: mapStatus(item.status),
     image: item.images?.jpg?.large_image_url || item.images?.jpg?.image_url || null
   };
+}
+
+
+
+async function readJsonBody(req) {
+  if (req.body && typeof req.body === 'object') return req.body;
+  if (typeof req.body === 'string') {
+    try { return JSON.parse(req.body || '{}'); } catch { return {}; }
+  }
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const raw = Buffer.concat(chunks).toString('utf8');
+  try { return JSON.parse(raw || '{}'); } catch { return {}; }
+}
+
+async function supabaseAuth(pathname, { method = 'GET', token = '', body = null } = {}) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) throw new Error('SUPABASE_ENV_NOT_SET');
+  const headers = {
+    apikey: SUPABASE_ANON_KEY,
+    Authorization: token ? `Bearer ${token}` : `Bearer ${SUPABASE_ANON_KEY}`,
+    'Content-Type': 'application/json'
+  };
+  const response = await fetch(`${SUPABASE_URL}/auth/v1${pathname}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const text = await response.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { message: text || '' }; }
+  if (!response.ok) {
+    const err = new Error(data?.msg || data?.message || `SUPABASE_AUTH_${response.status}`);
+    err.status = response.status;
+    throw err;
+  }
+  return data;
+}
+
+async function supabaseRest(pathname, { method = 'GET', token, body = null, query = '' } = {}) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) throw new Error('SUPABASE_ENV_NOT_SET');
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${pathname}${query}`, {
+    method,
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Prefer: method === 'POST' ? 'resolution=merge-duplicates,return=minimal' : 'return=representation'
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const text = await response.text();
+  let data = [];
+  try { data = text ? JSON.parse(text) : []; } catch { data = []; }
+  if (!response.ok) {
+    const err = new Error(data?.message || `SUPABASE_REST_${response.status}`);
+    err.status = response.status;
+    throw err;
+  }
+  return data;
+}
+
+function getBearer(req) {
+  const header = req.headers?.authorization || '';
+  if (!header.startsWith('Bearer ')) return '';
+  return header.slice('Bearer '.length).trim();
 }
 
 function normalizeEmbedUrl(urlRaw) {
@@ -189,11 +256,82 @@ module.exports = async (req, res) => {
       return json(res, response.status, body);
     }
 
-    if (path === '/config') {
+    if (path === '/auth/register' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const email = String(body?.email || '').trim();
+      const password = String(body?.password || '');
+      if (!email || !password) return json(res, 400, { error: { code: 'INVALID_INPUT', message: 'Email and password are required' } });
+      const data = await supabaseAuth('/signup', { method: 'POST', body: { email, password } });
+      return json(res, 200, { ok: true, user: data.user || null, session: data.session || null });
+    }
+
+    if (path === '/auth/login' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      const email = String(body?.email || '').trim();
+      const password = String(body?.password || '');
+      if (!email || !password) return json(res, 400, { error: { code: 'INVALID_INPUT', message: 'Email and password are required' } });
+      const data = await supabaseAuth('/token?grant_type=password', { method: 'POST', body: { email, password } });
       return json(res, 200, {
-        supabaseUrl: process.env.SUPABASE_URL || '',
-        supabaseAnonKey: process.env.SUPABASE_ANON_KEY || ''
+        access_token: data.access_token || '',
+        refresh_token: data.refresh_token || '',
+        expires_in: data.expires_in || 0,
+        token_type: data.token_type || 'bearer',
+        user: data.user || null
       });
+    }
+
+    if (path === '/auth/user' && req.method === 'GET') {
+      const token = getBearer(req);
+      if (!token) return json(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Missing token' } });
+      const data = await supabaseAuth('/user', { method: 'GET', token });
+      return json(res, 200, { user: data || null });
+    }
+
+    if (path === '/auth/logout' && req.method === 'POST') {
+      const token = getBearer(req);
+      if (!token) return json(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Missing token' } });
+      await supabaseAuth('/logout', { method: 'POST', token });
+      return json(res, 200, { ok: true });
+    }
+
+    if (path === '/user/my-list' && req.method === 'GET') {
+      const token = getBearer(req);
+      if (!token) return json(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Missing token' } });
+      const rows = await supabaseRest('my_list', { method: 'GET', token, query: '?select=payload&order=updated_at.desc&limit=60' });
+      return json(res, 200, { rows: (rows || []).map((r) => r.payload).filter(Boolean) });
+    }
+
+    if (path === '/user/continue-watching' && req.method === 'GET') {
+      const token = getBearer(req);
+      if (!token) return json(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Missing token' } });
+      const rows = await supabaseRest('continue_watching', { method: 'GET', token, query: '?select=payload&order=updated_at.desc&limit=24' });
+      return json(res, 200, { rows: (rows || []).map((r) => r.payload).filter(Boolean) });
+    }
+
+    if (path === '/user/my-list' && req.method === 'POST') {
+      const token = getBearer(req);
+      if (!token) return json(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Missing token' } });
+      const body = await readJsonBody(req);
+      const payload = Array.isArray(body?.rows) ? body.rows : [];
+      const user = await supabaseAuth('/user', { method: 'GET', token });
+      const rows = payload.map((x) => ({ user_id: user.id, anime_id: Number(x.id), payload: x, updated_at: new Date(Number(x.updatedAt || Date.now())).toISOString() }))
+        .filter((x) => Number.isFinite(x.anime_id) && x.anime_id > 0)
+        .slice(0, 60);
+      if (rows.length) await supabaseRest('my_list', { method: 'POST', token, query: '?on_conflict=user_id,anime_id', body: rows });
+      return json(res, 200, { ok: true });
+    }
+
+    if (path === '/user/continue-watching' && req.method === 'POST') {
+      const token = getBearer(req);
+      if (!token) return json(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Missing token' } });
+      const body = await readJsonBody(req);
+      const payload = Array.isArray(body?.rows) ? body.rows : [];
+      const user = await supabaseAuth('/user', { method: 'GET', token });
+      const rows = payload.map((x) => ({ user_id: user.id, anime_id: Number(x.id), payload: x, updated_at: new Date(Number(x.updatedAt || Date.now())).toISOString() }))
+        .filter((x) => Number.isFinite(x.anime_id) && x.anime_id > 0)
+        .slice(0, 24);
+      if (rows.length) await supabaseRest('continue_watching', { method: 'POST', token, query: '?on_conflict=user_id,anime_id', body: rows });
+      return json(res, 200, { ok: true });
     }
 
     if (path === '/live') {

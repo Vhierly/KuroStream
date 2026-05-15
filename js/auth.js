@@ -1,65 +1,66 @@
 window.Auth = (() => {
-  const CFG_URL_KEY = 'kuro_supabase_url';
-  const CFG_ANON_KEY = 'kuro_supabase_anon_key';
+  const TOKEN_KEY = 'kuro_auth_access_token';
+  const REFRESH_KEY = 'kuro_auth_refresh_token';
+  const USER_KEY = 'kuro_auth_user';
 
-  let client = null;
   let currentUser = null;
   let syncing = false;
 
-  const getConfig = () => ({
-    url: localStorage.getItem(CFG_URL_KEY) || '',
-    anonKey: localStorage.getItem(CFG_ANON_KEY) || ''
-  });
-
-  const setConfig = (url, anonKey) => {
-    localStorage.setItem(CFG_URL_KEY, String(url || '').trim());
-    localStorage.setItem(CFG_ANON_KEY, String(anonKey || '').trim());
-    client = null;
+  const getToken = () => localStorage.getItem(TOKEN_KEY) || '';
+  const setSession = ({ access_token = '', refresh_token = '', user = null } = {}) => {
+    if (access_token) localStorage.setItem(TOKEN_KEY, access_token);
+    if (refresh_token) localStorage.setItem(REFRESH_KEY, refresh_token);
+    if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
   };
 
-  const loadConfigFromServer = async () => {
-    try {
-      const response = await fetch('/api/config', { cache: 'no-store' });
-      if (!response.ok) return null;
-      const json = await response.json();
-      if (!json?.supabaseUrl || !json?.supabaseAnonKey) return null;
-      setConfig(json.supabaseUrl, json.supabaseAnonKey);
-      return json;
-    } catch {
-      return null;
-    }
+  const clearSession = () => {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(REFRESH_KEY);
+    localStorage.removeItem(USER_KEY);
+    currentUser = null;
   };
 
-  const hasConfig = () => {
-    const cfg = getConfig();
-    return Boolean(cfg.url && cfg.anonKey);
-  };
-
-  const ensureClient = async () => {
-    if (client) return client;
-    if (!window.supabase?.createClient) throw new Error('Supabase SDK belum ter-load.');
-
-    let cfg = getConfig();
-    if (!cfg.url || !cfg.anonKey) {
-      await loadConfigFromServer();
-      cfg = getConfig();
+  const api = async (path, { method = 'GET', body = null, auth = false } = {}) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (auth) {
+      const token = getToken();
+      if (!token) throw new Error('Not logged in');
+      headers.Authorization = `Bearer ${token}`;
     }
 
-    if (!cfg.url || !cfg.anonKey) throw new Error('Supabase belum dikonfigurasi. Isi di login page atau set ENV di Vercel.');
-    client = window.supabase.createClient(cfg.url, cfg.anonKey, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+    const response = await fetch(`/api${path}`, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined
     });
-    return client;
+
+    const json = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = json?.error?.message || json?.message || 'Request failed';
+      throw new Error(message);
+    }
+    return json;
   };
 
   const getUser = async () => {
+    const token = getToken();
+    if (!token) return null;
+
     try {
-      const c = await ensureClient();
-      const { data, error } = await c.auth.getUser();
-      if (error) return null;
-      currentUser = data?.user || null;
+      const json = await api('/auth/user', { auth: true });
+      currentUser = json.user || null;
+      if (currentUser) localStorage.setItem(USER_KEY, JSON.stringify(currentUser));
       return currentUser;
     } catch {
+      const fallback = localStorage.getItem(USER_KEY);
+      if (fallback) {
+        try {
+          currentUser = JSON.parse(fallback);
+          return currentUser;
+        } catch {
+          return null;
+        }
+      }
       return null;
     }
   };
@@ -68,47 +69,45 @@ window.Auth = (() => {
     if (syncing) return;
     syncing = true;
     try {
-      const c = await ensureClient();
       const user = await getUser();
       if (!user) return;
+
       const local = await UI.exportLocalData();
+      await api('/user/my-list', { method: 'POST', auth: true, body: { rows: local.myList || [] } });
+      await api('/user/continue-watching', { method: 'POST', auth: true, body: { rows: local.continueWatching || [] } });
 
-      const localRows = local.myList.map((x) => ({ user_id: user.id, anime_id: Number(x.id), payload: x, updated_at: new Date(Number(x.updatedAt || Date.now())).toISOString() }));
-      const localContinueRows = local.continueWatching.map((x) => ({ user_id: user.id, anime_id: Number(x.id), payload: x, updated_at: new Date(Number(x.updatedAt || Date.now())).toISOString() }));
-
-      if (localRows.length) await c.from('my_list').upsert(localRows, { onConflict: 'user_id,anime_id' });
-      if (localContinueRows.length) await c.from('continue_watching').upsert(localContinueRows, { onConflict: 'user_id,anime_id' });
-
-      const [cloudListRes, cloudContinueRes] = await Promise.all([
-        c.from('my_list').select('payload').eq('user_id', user.id).order('updated_at', { ascending: false }).limit(60),
-        c.from('continue_watching').select('payload').eq('user_id', user.id).order('updated_at', { ascending: false }).limit(24)
+      const [cloudList, cloudContinue] = await Promise.all([
+        api('/user/my-list', { auth: true }),
+        api('/user/continue-watching', { auth: true })
       ]);
 
-      const cloudList = (cloudListRes.data || []).map((r) => r.payload).filter(Boolean);
-      const cloudContinue = (cloudContinueRes.data || []).map((r) => r.payload).filter(Boolean);
-      await UI.replaceLocalData({ myList: cloudList, continueWatching: cloudContinue });
+      await UI.replaceLocalData({
+        myList: cloudList.rows || [],
+        continueWatching: cloudContinue.rows || []
+      });
     } finally {
       syncing = false;
     }
   };
 
   const signUp = async (email, password) => {
-    const c = await ensureClient();
-    const { error } = await c.auth.signUp({ email, password });
-    if (error) throw error;
+    await api('/auth/register', { method: 'POST', body: { email, password } });
   };
 
   const signIn = async (email, password) => {
-    const c = await ensureClient();
-    const { error } = await c.auth.signInWithPassword({ email, password });
-    if (error) throw error;
+    const json = await api('/auth/login', { method: 'POST', body: { email, password } });
+    setSession(json);
+    currentUser = json.user || null;
     await syncCurrentUserData();
   };
 
   const signOut = async () => {
-    const c = await ensureClient();
-    await c.auth.signOut();
-    currentUser = null;
+    try {
+      if (getToken()) await api('/auth/logout', { method: 'POST', auth: true });
+    } catch (_e) {
+      // ignore
+    }
+    clearSession();
   };
 
   const initAuthBadge = async () => {
@@ -124,5 +123,5 @@ window.Auth = (() => {
     }
   };
 
-  return { getConfig, setConfig, loadConfigFromServer, hasConfig, ensureClient, getUser, syncCurrentUserData, signUp, signIn, signOut, initAuthBadge };
+  return { getUser, syncCurrentUserData, signUp, signIn, signOut, initAuthBadge };
 })();
