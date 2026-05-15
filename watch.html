@@ -179,7 +179,38 @@
         }
 
         if (!selected?.url && !selected?.embed) {
-          screen.innerHTML = `<div class="muted">${watch?.streamProvider?.note || 'Source belum tersedia.'}</div>`;
+          const note = watch?.streamProvider?.note || 'Source belum tersedia.';
+          const trailerEmbed = watch?.streamProvider?.trailer?.embed || null;
+          const hasApiMisconfig = /not configured/i.test(note);
+
+          if (hasApiMisconfig) {
+            screen.innerHTML = `
+              <div class="card" style="max-width:760px;margin:0 auto;">
+                <div class="card-body" style="text-align:left;">
+                  <h3>Streaming API belum aktif</h3>
+                  <p class="muted" style="margin-bottom:10px;">${esc(note)}</p>
+                  ${trailerEmbed ? '<button class="btn" id="open-trailer-only">Watch trailer on YouTube</button>' : ''}
+                </div>
+              </div>
+            `;
+
+            const trailerBtn = UI.el('#open-trailer-only');
+            if (trailerBtn && trailerEmbed) {
+              let openUrl = String(trailerEmbed);
+              if (openUrl.includes('listType=search') && openUrl.includes('list=')) {
+                const q = decodeURIComponent(openUrl.split('list=')[1] || '').replace(/\+/g, ' ');
+                openUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
+              } else {
+                openUrl = openUrl
+                  .replace('youtube.com/embed/', 'youtube.com/watch?v=')
+                  .replace('youtube-nocookie.com/embed/', 'youtube.com/watch?v=');
+              }
+              trailerBtn.onclick = () => window.open(openUrl, '_blank', 'noopener,noreferrer');
+            }
+            return;
+          }
+
+          screen.innerHTML = `<div class="muted">${esc(note)}</div>`;
           return;
         }
 

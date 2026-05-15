@@ -363,19 +363,7 @@ module.exports = async (req, res) => {
       const trailerEmbed = normalizeEmbedUrl(detail.data?.trailer?.embed_url || detail.data?.trailer?.url)
         || fallbackSearchEmbed(anime.title);
       if (!proxyConfigured) {
-        note = 'AnimePahe proxy is not configured. Using official trailer fallback. Set ANIMEPAHE_PROXY_BASE in Vercel to enable AnimePahe sources.';
-      }
-
-      if (!streamSources.length && trailerEmbed) {
-        streamSources.push({
-          url: null,
-          isM3U8: false,
-          filename: 'Trailer',
-          embed: trailerEmbed,
-          resolution: 'Trailer',
-          isDub: false,
-          fanSub: 'official'
-        });
+        note = 'AnimePahe proxy is not configured. Set ANIMEPAHE_PROXY_BASE or KURO_BACKEND_BASE in Vercel to enable episode streaming API.';
       }
 
       return json(res, 200, {
@@ -388,6 +376,10 @@ module.exports = async (req, res) => {
           available: Boolean(streamSources.length),
           note,
           sources: streamSources,
+          trailer: trailerEmbed ? {
+            embed: trailerEmbed,
+            title: 'Official trailer'
+          } : null,
           downloads: []
         }
       });
