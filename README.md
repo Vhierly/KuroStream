@@ -54,9 +54,10 @@ This repo is ready for full Vercel deployment:
 - Frontend: static HTML/CSS/JS from project root
 - API: serverless function at `api/[...route].js`
 
-Required Vercel environment variable:
+Required Vercel environment variable (choose one mode):
 
-- `ANIMEPAHE_PROXY_BASE` (example: `https://your-proxy-domain/api`)
+- `ANIMEPAHE_PROXY_BASE` (example: `https://your-proxy-domain/api`) for direct AnimePahe proxy mode
+- `KURO_BACKEND_BASE` (example: `https://your-wsl-tunnel.trycloudflare.com`) to forward all `/api/*` traffic to your running WSL backend
 
 Optional envs:
 

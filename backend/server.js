@@ -157,7 +157,18 @@ function normalizeEmbedUrl(urlRaw) {
     const id = url.split('youtu.be/')[1]?.split(/[?&]/)[0];
     return id ? `https://www.youtube.com/embed/${id}` : url;
   }
+  if (url.includes('youtube-nocookie.com/embed/')) {
+    const id = url.split('/embed/')[1]?.split(/[?&]/)[0];
+    return id ? `https://www.youtube.com/embed/${id}` : url;
+  }
   return url;
+}
+
+function fallbackSearchEmbed(titleRaw) {
+  const title = String(titleRaw || '').trim();
+  if (!title) return null;
+  const q = encodeURIComponent(`${title} official trailer anime`);
+  return `https://www.youtube.com/embed?listType=search&list=${q}`;
 }
 
 async function jikanGet(url, params = {}, ttlMs = 120000) {
@@ -476,7 +487,8 @@ app.get('/api/watch/:id', async (req, res) => {
       };
     }
 
-    const trailerEmbed = normalizeEmbedUrl(detail.data?.trailer?.embed_url || detail.data?.trailer?.url);
+    const trailerEmbed = normalizeEmbedUrl(detail.data?.trailer?.embed_url || detail.data?.trailer?.url)
+      || fallbackSearchEmbed(anime.title);
     const paheSources = Array.isArray(pahe.play?.sources) ? pahe.play.sources : [];
     const streamSources = paheSources.filter((source) => source?.isDub !== true);
 

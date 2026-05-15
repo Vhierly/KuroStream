@@ -1,5 +1,6 @@
 const JIKAN_BASE = process.env.JIKAN_BASE || 'https://api.jikan.moe/v4';
 const ANIMEPAHE_PROXY_BASE = process.env.ANIMEPAHE_PROXY_BASE || '';
+const KURO_BACKEND_BASE = process.env.KURO_BACKEND_BASE || '';
 const JIKAN_CACHE_TTL_MS = Number(process.env.JIKAN_CACHE_TTL_MS || 120000);
 const JIKAN_CACHE_MAX_SIZE = Math.max(20, Number(process.env.JIKAN_CACHE_MAX_SIZE || 300));
 
@@ -77,6 +78,13 @@ function normalizeEmbedUrl(urlRaw) {
   return url;
 }
 
+function fallbackSearchEmbed(titleRaw) {
+  const title = String(titleRaw || '').trim();
+  if (!title) return null;
+  const q = encodeURIComponent(`${title} official trailer anime`);
+  return `https://www.youtube.com/embed?listType=search&list=${q}`;
+}
+
 async function jikanGet(url, params = {}, ttlMs = JIKAN_CACHE_TTL_MS) {
   const cacheKey = `${url}?${new URLSearchParams(params).toString()}`;
   const cached = getCache(cacheKey, ttlMs);
@@ -132,11 +140,22 @@ async function checkReadiness() {
     jikanError = e?.message || String(e);
   }
 
-  try {
-    const check = await paheProxyGet('/airing', { page: 1 });
-    proxyOk = Array.isArray(check?.data);
-  } catch (e) {
-    proxyError = e?.message || String(e);
+  if (KURO_BACKEND_BASE) {
+    try {
+      const u = new URL('/api/live', KURO_BACKEND_BASE.endsWith('/') ? KURO_BACKEND_BASE : `${KURO_BACKEND_BASE}/`);
+      const r = await fetch(u.toString(), { headers: { Accept: 'application/json' } });
+      proxyOk = r.ok;
+      if (!r.ok) proxyError = `Kuro backend ${r.status}`;
+    } catch (e) {
+      proxyError = e?.message || String(e);
+    }
+  } else {
+    try {
+      const check = await paheProxyGet('/airing', { page: 1 });
+      proxyOk = Array.isArray(check?.data);
+    } catch (e) {
+      proxyError = e?.message || String(e);
+    }
   }
 
   return {
@@ -145,7 +164,8 @@ async function checkReadiness() {
       jikan: jikanOk,
       jikanError,
       animepaheProxy: proxyOk,
-      animepaheProxyError: proxyError
+      animepaheProxyError: proxyError,
+      kuroBackendProxyMode: Boolean(KURO_BACKEND_BASE)
     }
   };
 }
@@ -154,6 +174,20 @@ module.exports = async (req, res) => {
   try {
     const urlObj = new URL(req.url, 'http://localhost');
     const path = urlObj.pathname.replace(/^\/api/, '');
+
+    if (KURO_BACKEND_BASE) {
+      const base = KURO_BACKEND_BASE.endsWith('/') ? KURO_BACKEND_BASE.slice(0, -1) : KURO_BACKEND_BASE;
+      const upstream = `${base}/api${path}${urlObj.search || ''}`;
+      const response = await fetch(upstream, { headers: { Accept: 'application/json' } });
+      const raw = await response.text();
+      let body = null;
+      try {
+        body = JSON.parse(raw);
+      } catch (_e) {
+        body = { error: { code: 'UPSTREAM_NON_JSON', message: raw.slice(0, 500) } };
+      }
+      return json(res, response.status, body);
+    }
 
     if (path === '/live') {
       return json(res, 200, { ok: true, uptimeSec: Math.floor(process.uptime()) });
@@ -326,7 +360,8 @@ module.exports = async (req, res) => {
         note = `AnimePahe proxy error: ${e?.message || String(e)}`;
       }
 
-      const trailerEmbed = normalizeEmbedUrl(detail.data?.trailer?.embed_url || detail.data?.trailer?.url);
+      const trailerEmbed = normalizeEmbedUrl(detail.data?.trailer?.embed_url || detail.data?.trailer?.url)
+        || fallbackSearchEmbed(anime.title);
       if (!proxyConfigured) {
         note = 'AnimePahe proxy is not configured. Using official trailer fallback. Set ANIMEPAHE_PROXY_BASE in Vercel to enable AnimePahe sources.';
       }
