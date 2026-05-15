@@ -294,6 +294,7 @@ module.exports = async (req, res) => {
 
       let streamSources = [];
       let note = 'No AnimePahe match';
+      const proxyConfigured = Boolean(ANIMEPAHE_PROXY_BASE);
 
       try {
         const search = await paheProxyGet('/search', { q: anime.title });
@@ -322,7 +323,11 @@ module.exports = async (req, res) => {
       }
 
       const trailerEmbed = normalizeEmbedUrl(detail.data?.trailer?.embed_url || detail.data?.trailer?.url);
-      if (!streamSources.length && trailerEmbed) {
+      if (!proxyConfigured) {
+        note = 'AnimePahe proxy is not configured. Set ANIMEPAHE_PROXY_BASE in Vercel environment variables.';
+      }
+
+      if (proxyConfigured && !streamSources.length && trailerEmbed) {
         streamSources.push({
           url: null,
           isM3U8: false,
@@ -341,7 +346,7 @@ module.exports = async (req, res) => {
         related: (top.data || []).slice(0, 6).map(mapAnime),
         streamProvider: {
           source: 'animepahe-api',
-          available: Boolean(streamSources.length),
+          available: proxyConfigured ? Boolean(streamSources.length) : false,
           note,
           sources: streamSources,
           downloads: []
