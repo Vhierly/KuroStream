@@ -239,15 +239,7 @@ module.exports = async (req, res) => {
         ep: a.episodes ? `EP ${a.episodes}` : 'EP ?',
         time: `${i + 1}h ago`
       }));
-      const continueWatching = trending.slice(0, 4).map((a, i) => ({
-        id: a.id,
-        title: a.title,
-        image: a.image || null,
-        ep: Math.max(1, Math.floor((a.eps || 12) * 0.6)),
-        progress: 35 + i * 15
-      }));
-
-      return json(res, 200, { featured, trending, latest, continueWatching });
+      return json(res, 200, { featured, trending, latest });
     }
 
     if (path === '/catalog') {
@@ -383,12 +375,6 @@ module.exports = async (req, res) => {
           downloads: []
         }
       });
-    }
-
-    if (path === '/my-list') {
-      const top = await jikanGet('/top/anime', { limit: 12 });
-      const rows = (top.data || []).slice(0, 8).map(mapAnime);
-      return json(res, 200, rows);
     }
 
     return json(res, 404, { error: { code: 'NOT_FOUND', message: 'Endpoint not found' } });

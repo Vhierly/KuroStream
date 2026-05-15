@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KuroStream — Anime Details</title>
   <link rel="stylesheet" href="css/styles.css">
-  <script defer src="js/mock-data.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dexie@4/dist/dexie.min.js"></script>
   <script defer src="js/api.js"></script>
   <script defer src="js/components.js"></script>
   <script defer src="js/app.js"></script>
@@ -144,8 +144,8 @@
         });
 
         UI.el("#watch-now").onclick = () => location.href = `watch.html?id=${animeId}&ep=1`;
-        UI.el("#bookmark").onclick = () => {
-          const saved = UI.toggleMyList(detail.anime);
+        UI.el("#bookmark").onclick = async () => {
+          const saved = await UI.toggleMyList(detail.anime);
           UI.openModal(saved ? "Saved" : "Removed", saved ? "Anime added to My List." : "Anime removed from My List.");
         };
         UI.el("#trailer").onclick = () => {

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KuroStream — Home</title>
   <link rel="stylesheet" href="css/styles.css">
-  <script defer src="js/mock-data.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dexie@4/dist/dexie.min.js"></script>
   <script defer src="js/api.js"></script>
   <script defer src="js/components.js"></script>
   <script defer src="js/app.js"></script>
@@ -114,8 +114,8 @@
           const addBtn = document.querySelector(".hero .btn:not(.primary)");
           if (heroAnime.id && watchBtn) watchBtn.onclick = () => location.href = `watch.html?id=${heroAnime.id}&ep=1`;
           if (heroAnime.id && addBtn) {
-            addBtn.onclick = () => {
-              const saved = UI.toggleMyList(heroAnime);
+            addBtn.onclick = async () => {
+              const saved = await UI.toggleMyList(heroAnime);
               UI.openModal(saved ? "Added" : "Removed", saved ? "Anime ditambahkan ke My List." : "Anime dihapus dari My List.");
             };
           }
@@ -143,12 +143,8 @@
           };
         });
 
-        const localContinue = UI.loadContinueWatching();
-        const localById = new Map(localContinue.map((x) => [Number(x.id), x]));
-        const mergedContinue = [
-          ...localContinue,
-          ...data.continueWatching.filter((x) => !localById.has(Number(x.id)))
-        ].slice(0, 8).map((row) => {
+        const localContinue = await UI.loadContinueWatching();
+        const mergedContinue = localContinue.slice(0, 8).map((row) => {
           const fallback = data.trending.find((a) => Number(a.id) === Number(row.id));
           return {
             ...row,
@@ -159,7 +155,7 @@
           };
         });
 
-        UI.el("#continue").innerHTML = mergedContinue.map((row) => `
+        UI.el("#continue").innerHTML = mergedContinue.length ? mergedContinue.map((row) => `
           <article class="card card-link" data-id="${row.id}" data-ep="${row.ep}">
             <div class="poster ${row.image ? 'poster-image' : ''}" ${row.image ? `style="background-image:url('${String(row.image).replace(/'/g, "%27")}')"` : ''}>Continue • Episode ${row.ep}</div>
             <div class="card-body">
@@ -168,7 +164,7 @@
               <p class="meta"><span>${esc(row.progress || 0)}% watched</span></p>
             </div>
           </article>
-        `).join("");
+        `).join("") : `<p class="muted">Belum ada Continue Watching. Mulai nonton dulu, nanti progress muncul di sini.</p>`;
 
         document.querySelectorAll("#continue .card-link").forEach((node) => {
           node.onclick = () => location.href = `watch.html?id=${node.dataset.id}&ep=${node.dataset.ep}`;

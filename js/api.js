@@ -35,9 +35,5 @@ window.ApiClient = (() => {
     return request(`/watch/${id}?ep=${ep}`);
   }
 
-  async function getMyList() {
-    return request('/my-list');
-  }
-
-  return { getHome, getCatalog, getAnimeDetail, getWatchContext, getMyList };
+  return { getHome, getCatalog, getAnimeDetail, getWatchContext };
 })();

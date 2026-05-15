@@ -1,30 +1,16 @@
 window.UI = (() => {
   const el = (sel) => document.querySelector(sel);
 
-  const saveMyList = (items) => localStorage.setItem('kuro_my_list', JSON.stringify(items || []));
-  const loadMyList = () => {
-    try {
-      return JSON.parse(localStorage.getItem('kuro_my_list') || '[]');
-    } catch {
-      return [];
-    }
-  };
+  const LEGACY_MY_LIST_KEY = 'kuro_my_list';
+  const LEGACY_CONTINUE_KEY = 'kuro_continue';
+  const LEGACY_AUTONEXT_KEY = 'autonext';
 
-  const isSaved = (id) => loadMyList().some((item) => Number(item.id) === Number(id));
-  const toggleMyList = (anime) => {
-    const rows = loadMyList();
-    const idx = rows.findIndex((item) => Number(item.id) === Number(anime.id));
-    if (idx >= 0) {
-      rows.splice(idx, 1);
-      saveMyList(rows);
-      return false;
-    }
-    rows.unshift(anime);
-    saveMyList(rows.slice(0, 60));
-    return true;
-  };
-
-  const CONTINUE_KEY = 'kuro_continue';
+  const db = new Dexie('kurostream_db');
+  db.version(1).stores({
+    myList: 'id, title, status, updatedAt',
+    continueWatching: 'id, updatedAt',
+    settings: 'key'
+  });
 
   const escapeHtml = (value) => String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -32,31 +18,164 @@ window.UI = (() => {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-  const loadContinueWatching = () => {
+  let initPromise = null;
+
+  const parseJsonSafe = (raw, fallback) => {
     try {
-      const rows = JSON.parse(localStorage.getItem(CONTINUE_KEY) || '[]');
-      return Array.isArray(rows) ? rows : [];
+      const parsed = JSON.parse(raw || '');
+      return parsed ?? fallback;
     } catch {
-      return [];
+      return fallback;
     }
   };
 
-  const saveContinueWatching = (rows) => {
-    localStorage.setItem(CONTINUE_KEY, JSON.stringify((rows || []).slice(0, 24)));
+  const initStorage = async () => {
+    if (initPromise) return initPromise;
+    initPromise = (async () => {
+      await db.open();
+
+      const migrated = await db.settings.get('legacyMigratedV1');
+      if (migrated?.value) return;
+
+      const legacyMyList = parseJsonSafe(localStorage.getItem(LEGACY_MY_LIST_KEY), []);
+      const legacyContinue = parseJsonSafe(localStorage.getItem(LEGACY_CONTINUE_KEY), []);
+      const legacyAutoNext = localStorage.getItem(LEGACY_AUTONEXT_KEY);
+
+      await db.transaction('rw', db.myList, db.continueWatching, db.settings, async () => {
+        if (Array.isArray(legacyMyList) && legacyMyList.length) {
+          const now = Date.now();
+          const rows = legacyMyList
+            .filter((x) => Number.isFinite(Number(x?.id)) && Number(x.id) > 0)
+            .slice(0, 60)
+            .map((x, idx) => ({ ...x, id: Number(x.id), updatedAt: now - idx }));
+          if (rows.length) await db.myList.bulkPut(rows);
+        }
+
+        if (Array.isArray(legacyContinue) && legacyContinue.length) {
+          const now = Date.now();
+          const rows = legacyContinue
+            .filter((x) => Number.isFinite(Number(x?.id)) && Number(x.id) > 0)
+            .slice(0, 24)
+            .map((x, idx) => ({
+              ...x,
+              id: Number(x.id),
+              ep: Number(x.ep || 1),
+              progress: Number(x.progress || 0),
+              updatedAt: x.updatedAt || (now - idx)
+            }));
+          if (rows.length) await db.continueWatching.bulkPut(rows);
+        }
+
+        if (legacyAutoNext === '1' || legacyAutoNext === '0') {
+          await db.settings.put({ key: 'autonext', value: legacyAutoNext });
+        }
+
+        await db.settings.put({ key: 'legacyMigratedV1', value: '1' });
+      });
+
+      localStorage.removeItem(LEGACY_MY_LIST_KEY);
+      localStorage.removeItem(LEGACY_CONTINUE_KEY);
+      localStorage.removeItem(LEGACY_AUTONEXT_KEY);
+    })();
+
+    return initPromise;
   };
 
-  const updateContinueWatching = (entry) => {
+  const saveMyList = async (items) => {
+    await initStorage();
+    const list = Array.isArray(items) ? items : [];
+    await db.transaction('rw', db.myList, async () => {
+      await db.myList.clear();
+      const now = Date.now();
+      const rows = list
+        .filter((x) => Number.isFinite(Number(x?.id)) && Number(x.id) > 0)
+        .slice(0, 60)
+        .map((x, idx) => ({ ...x, id: Number(x.id), updatedAt: now - idx }));
+      if (rows.length) await db.myList.bulkPut(rows);
+    });
+  };
+
+  const loadMyList = async () => {
+    await initStorage();
+    return db.myList.orderBy('updatedAt').reverse().toArray();
+  };
+
+  const isSaved = async (id) => {
+    await initStorage();
+    const row = await db.myList.get(Number(id));
+    return Boolean(row);
+  };
+
+  const toggleMyList = async (anime) => {
+    await initStorage();
+    const id = Number(anime?.id);
+    if (!Number.isFinite(id) || id <= 0) return false;
+
+    const exists = await db.myList.get(id);
+    if (exists) {
+      await db.myList.delete(id);
+      return false;
+    }
+
+    const rows = await db.myList.toArray();
+    if (rows.length >= 60) {
+      rows.sort((a, b) => Number(a.updatedAt || 0) - Number(b.updatedAt || 0));
+      await db.myList.delete(rows[0].id);
+    }
+
+    await db.myList.put({ ...anime, id, updatedAt: Date.now() });
+    return true;
+  };
+
+  const loadContinueWatching = async () => {
+    await initStorage();
+    return db.continueWatching.orderBy('updatedAt').reverse().limit(24).toArray();
+  };
+
+  const saveContinueWatching = async (rows) => {
+    await initStorage();
+    const list = Array.isArray(rows) ? rows : [];
+    await db.transaction('rw', db.continueWatching, async () => {
+      await db.continueWatching.clear();
+      const now = Date.now();
+      const payload = list
+        .filter((x) => Number.isFinite(Number(x?.id)) && Number(x.id) > 0)
+        .slice(0, 24)
+        .map((x, idx) => ({
+          ...x,
+          id: Number(x.id),
+          ep: Number(x.ep || 1),
+          progress: Number(x.progress || 0),
+          updatedAt: x.updatedAt || (now - idx)
+        }));
+      if (payload.length) await db.continueWatching.bulkPut(payload);
+    });
+  };
+
+  const updateContinueWatching = async (entry) => {
+    await initStorage();
     if (!entry || !entry.id) return;
-    const rows = loadContinueWatching();
-    const idx = rows.findIndex((x) => Number(x.id) === Number(entry.id));
-    const merged = {
-      ...(idx >= 0 ? rows[idx] : {}),
+    const id = Number(entry.id);
+    const prev = await db.continueWatching.get(id);
+    await db.continueWatching.put({
+      ...(prev || {}),
       ...entry,
+      id,
+      ep: Number(entry.ep || prev?.ep || 1),
+      progress: Number(entry.progress || 0),
       updatedAt: Date.now()
-    };
-    if (idx >= 0) rows.splice(idx, 1);
-    rows.unshift(merged);
-    saveContinueWatching(rows);
+    });
+  };
+
+  const getSetting = async (key, fallback = null) => {
+    await initStorage();
+    const row = await db.settings.get(String(key));
+    return row?.value ?? fallback;
+  };
+
+  const setSetting = async (key, value) => {
+    await initStorage();
+    await db.settings.put({ key: String(key), value: String(value) });
   };
 
   const safeBgUrl = (url) => String(url || '').replace(/'/g, '%27');
@@ -113,6 +232,8 @@ window.UI = (() => {
     loadContinueWatching,
     saveContinueWatching,
     updateContinueWatching,
+    getSetting,
+    setSetting,
     escapeHtml
   };
 })();

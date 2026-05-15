@@ -328,15 +328,7 @@ app.get('/api/home', async (req, res) => {
       time: `${i + 1}h ago`
     }));
 
-    const continueWatching = trending.slice(0, 4).map((a, i) => ({
-      id: a.id,
-      title: a.title,
-      image: a.image || null,
-      ep: Math.max(1, Math.floor((a.eps || 12) * 0.6)),
-      progress: 35 + i * 15
-    }));
-
-    res.json({ featured, trending, latest: latestEpisodes, continueWatching });
+    res.json({ featured, trending, latest: latestEpisodes });
   } catch (error) {
     console.error('GET /api/home failed:', error);
     sendError(res, req, 500, 'HOME_FETCH_FAILED', 'Failed to load home data', error?.message || String(error));
@@ -525,16 +517,6 @@ app.get('/api/watch/:id', async (req, res) => {
     });
   } catch (error) {
     sendError(res, req, 500, 'WATCH_CONTEXT_FETCH_FAILED', 'Failed to load watch context', error.message);
-  }
-});
-
-app.get('/api/my-list', async (req, res) => {
-  try {
-    const top = await jikanGet('/top/anime', { limit: 12 });
-    const rows = (top.data || []).slice(0, 8).map(mapAnime);
-    res.json(rows);
-  } catch (error) {
-    sendError(res, req, 500, 'MY_LIST_FETCH_FAILED', 'Failed to load my list', error.message);
   }
 });
 

@@ -88,7 +88,7 @@ test('Critical routes respond with JSON and expected shape', async () => {
   const home = await homeRes.json();
   assert.ok(Array.isArray(home.trending));
   assert.ok(Array.isArray(home.latest));
-  assert.ok(Array.isArray(home.continueWatching));
+  assert.ok(!Object.prototype.hasOwnProperty.call(home, 'continueWatching'));
 
   const sampleId = home.trending?.[0]?.id;
   assert.equal(typeof sampleId, 'number');
