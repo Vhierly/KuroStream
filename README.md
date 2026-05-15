@@ -7,7 +7,7 @@ KuroStream is an anime streaming web app prototype with a Node.js backend.
 - Home, Explore, Detail, Watch, and My List pages
 - Jikan API integration for anime metadata
 - AnimePahe proxy integration for stream source lookup
-- Continue Watching (local progress persistence)
+- Continue Watching + My List persistence via Dexie.js (IndexedDB)
 - Health/readiness/liveness endpoints for deployment checks
 - Rate limiting, CORS controls, structured request logging
 
@@ -27,7 +27,10 @@ KuroStream is an anime streaming web app prototype with a Node.js backend.
 - `GET /api/catalog`
 - `GET /api/anime/:id/detail`
 - `GET /api/watch/:id?ep=1`
-- `GET /api/my-list`
+
+Notes:
+- `GET /api/home` returns `featured`, `trending`, and `latest`.
+- Continue Watching and My List are client-side user state (Dexie), not API-seeded data.
 
 ## Local Run
 
