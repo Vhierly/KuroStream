@@ -70,6 +70,10 @@ function normalizeEmbedUrl(urlRaw) {
     const id = url.split('youtu.be/')[1]?.split(/[?&]/)[0];
     return id ? `https://www.youtube.com/embed/${id}` : url;
   }
+  if (url.includes('youtube-nocookie.com/embed/')) {
+    const id = url.split('/embed/')[1]?.split(/[?&]/)[0];
+    return id ? `https://www.youtube.com/embed/${id}` : url;
+  }
   return url;
 }
 
@@ -324,10 +328,10 @@ module.exports = async (req, res) => {
 
       const trailerEmbed = normalizeEmbedUrl(detail.data?.trailer?.embed_url || detail.data?.trailer?.url);
       if (!proxyConfigured) {
-        note = 'AnimePahe proxy is not configured. Set ANIMEPAHE_PROXY_BASE in Vercel environment variables.';
+        note = 'AnimePahe proxy is not configured. Using official trailer fallback. Set ANIMEPAHE_PROXY_BASE in Vercel to enable AnimePahe sources.';
       }
 
-      if (proxyConfigured && !streamSources.length && trailerEmbed) {
+      if (!streamSources.length && trailerEmbed) {
         streamSources.push({
           url: null,
           isM3U8: false,
@@ -346,7 +350,7 @@ module.exports = async (req, res) => {
         related: (top.data || []).slice(0, 6).map(mapAnime),
         streamProvider: {
           source: 'animepahe-api',
-          available: proxyConfigured ? Boolean(streamSources.length) : false,
+          available: Boolean(streamSources.length),
           note,
           sources: streamSources,
           downloads: []
