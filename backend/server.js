@@ -13,6 +13,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const JIKAN_BASE = process.env.JIKAN_BASE || 'https://api.jikan.moe/v4';
 const ANIMEPAHE_BASE = process.env.ANIMEPAHE_BASE || 'https://animepahe.ru/api';
 const ANIMEPAHE_PROXY_BASE = process.env.ANIMEPAHE_PROXY_BASE || 'http://127.0.0.1:3030/api';
+const OTAKUDESU_API_BASE = process.env.OTAKUDESU_API_BASE || 'https://anoboy.be';
 const JIKAN_CACHE_TTL_MS = Number(process.env.JIKAN_CACHE_TTL_MS || 120000);
 const JIKAN_CACHE_MAX_SIZE = Math.max(20, Number(process.env.JIKAN_CACHE_MAX_SIZE || 300));
 
@@ -202,6 +203,28 @@ async function jikanGet(url, params = {}, ttlMs = 120000) {
   throw lastError;
 }
 
+async function getAllAnimeEpisodes(animeId) {
+  const all = [];
+  let page = 1;
+  const maxPages = 30;
+
+  while (page <= maxPages) {
+    const response = await jikanGet(`/anime/${animeId}/episodes`, { page });
+    const rows = Array.isArray(response?.data) ? response.data : [];
+    all.push(...rows);
+
+    const hasNext = Boolean(response?.pagination?.has_next_page);
+    if (!hasNext || rows.length === 0) break;
+    page += 1;
+  }
+
+  return all.map((ep, idx) => ({
+    num: Number(ep?.mal_id) > 0 ? Number(ep.mal_id) : idx + 1,
+    title: ep?.title || `Episode ${idx + 1}`,
+    duration: '24 min'
+  }));
+}
+
 async function checkUpstreamReadiness() {
   let jikanOk = false;
   let jikanError = null;
@@ -274,6 +297,368 @@ async function paheProxyGet(pathname, params = {}) {
     headers: { Accept: 'application/json' }
   });
   return res.data;
+}
+
+function normalizeTitle(value = '') {
+  return String(value)
+    .toLowerCase()
+    .replace(/\(.*?\)|\[.*?\]/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function titleTokens(value = '') {
+  return normalizeTitle(value).split(/\s+/).filter((x) => x.length >= 3);
+}
+
+function scoreTitleMatch(targetTitle, candidateTitle) {
+  const target = titleTokens(targetTitle);
+  const candidate = titleTokens(candidateTitle);
+  if (!target.length || !candidate.length) return 0;
+  const hit = target.filter((token) => candidate.includes(token)).length;
+  return hit / Math.max(target.length, 1);
+}
+
+async function otakudesuGet(pathname) {
+  if (!OTAKUDESU_API_BASE) throw new Error('OTAKUDESU_API_BASE not configured');
+  const res = await axios.get(`${OTAKUDESU_API_BASE}${pathname}`, {
+    timeout: 25000,
+    headers: { Accept: 'application/json' }
+  });
+  return res.data;
+}
+
+function isAnimeIndoV2Base() {
+  return /\/api\/v2\/anime\/?$/i.test(String(OTAKUDESU_API_BASE || ''));
+}
+
+function isAnoboyBase() {
+  return /anoboy\./i.test(String(OTAKUDESU_API_BASE || ''));
+}
+
+function getAnoboyBaseUrl() {
+  const raw = String(OTAKUDESU_API_BASE || '').trim();
+  if (!raw) return 'https://anoboy.be';
+  if (/^https?:\/\//i.test(raw)) return raw.replace(/\/+$/, '');
+  return `https://${raw.replace(/^\/+/, '').replace(/\/+$/, '')}`;
+}
+
+function parseAnimeIndoSlugPath(slug = '') {
+  const raw = String(slug || '').trim();
+  if (!raw) return null;
+  const match = raw.match(/\/anime\/([^/]+)\/([^/]+)/i);
+  if (!match) return null;
+  return { animeCode: match[1], animeId: match[2] };
+}
+
+function parseAnimeIndoEpisodePath(episodeUrl = '') {
+  const raw = String(episodeUrl || '').trim();
+  const match = raw.match(/\/anime\/([^/]+)\/([^/]+)\/episode\/([^/?#]+)/i);
+  if (!match) return null;
+  return { animeCode: match[1], animeId: match[2], episodeId: match[3] };
+}
+
+async function resolveAnimeIndoV2Episode(titleInput, requestedEp = 1) {
+  const titleCandidates = Array.from(new Set(
+    (Array.isArray(titleInput) ? titleInput : [titleInput])
+      .map((x) => String(x || '').trim().toLowerCase())
+      .filter(Boolean)
+  ));
+
+  const pools = ['/ongoing?page=1', '/completed?page=1', '/movie?page=1'];
+  const rows = [];
+  for (const p of pools) {
+    const data = await otakudesuGet(p).catch(() => null);
+    const arr = Array.isArray(data?.data) ? data.data : [];
+    rows.push(...arr);
+  }
+  if (!rows.length) return { available: false, note: 'AnimeIndo V2: katalog kosong/upstream gagal.', sources: [] };
+
+  const ranked = rows
+    .map((item) => ({ ...item, _score: Math.max(...titleCandidates.map((t) => scoreTitleMatch(t, item?.title || ''))) }))
+    .sort((a, b) => b._score - a._score);
+  const selectedAnime = ranked.find((x) => x._score >= 0.30) || ranked[0];
+  const parsed = parseAnimeIndoSlugPath(selectedAnime?.slug || '');
+  if (!parsed) return { available: false, note: 'AnimeIndo V2: slug anime tidak valid.', sources: [] };
+
+  const detail = await otakudesuGet(`/${parsed.animeCode}/${parsed.animeId}`).catch(() => null);
+  const eps = Array.isArray(detail?.data?.episode_list) ? detail.data.episode_list : [];
+  if (!eps.length) return { available: false, note: 'AnimeIndo V2: episode list kosong.', sources: [] };
+
+  const selectedEp = eps.find((e) => extractEpisodeNumber(e?.epsTitle) == requestedEp) || eps[0];
+  const episodeMeta = parseAnimeIndoEpisodePath(selectedEp?.episodeId || '');
+  if (!episodeMeta) return { available: false, note: 'AnimeIndo V2: episode path tidak ditemukan.', sources: [] };
+
+  const epRes = await otakudesuGet(`/${episodeMeta.animeCode}/${episodeMeta.animeId}/episode/${episodeMeta.episodeId}`).catch(() => null);
+  const sourcesRaw = Array.isArray(epRes?.data?.episode_list) ? epRes.data.episode_list : [];
+  const sources = sourcesRaw
+    .map((s) => ({
+      url: s?.source_video || null,
+      embed: s?.source_video || null,
+      isM3U8: String(s?.source_video || '').includes('.m3u8'),
+      filename: `AnimeIndo ${s?.size || 'auto'}`,
+      resolution: s?.size || 'auto',
+      isDub: false,
+      fanSub: 'indo',
+      sourceLang: 'id'
+    }))
+    .filter((s) => /^https?:\/\//i.test(String(s.url || '')));
+
+  if (sources.length) return { available: true, note: 'AnimeIndo V2 stream source ready', sources };
+
+  const activeEpisodeUrl = (Array.isArray(epRes?.data?.list_episode)
+    ? epRes.data.list_episode.find((row) => row?.active_eps)?.eps_slug
+    : null) || selectedEp?.episodeId || null;
+  const iframe = await extractOtakudesuIframe(activeEpisodeUrl || '');
+  if (iframe) {
+    return {
+      available: true,
+      note: 'AnimeIndo V2 iframe source ready',
+      sources: [{
+        url: iframe,
+        embed: iframe,
+        isM3U8: false,
+        filename: 'AnimeIndo Indo (iframe)',
+        resolution: 'auto',
+        isDub: false,
+        fanSub: 'indo',
+        sourceLang: 'id'
+      }]
+    };
+  }
+
+  return { available: false, note: 'AnimeIndo V2: stream kosong pada episode ini.', sources: [] };
+}
+
+function extractEpisodeNumber(text = '') {
+  const match = String(text || '').match(/(\d{1,4})\s*$/);
+  return match ? Number(match[1]) : null;
+}
+
+function normalizeOtakudesuEpisodeId(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (!/^https?:\/\//i.test(raw)) return raw.replace(/^\/+|\/+$/g, '');
+  const withoutQuery = raw.split('?')[0];
+  const match = withoutQuery.match(/\/episode\/([^/]+)\/?$/i);
+  return (match?.[1] || '').trim();
+}
+
+async function extractOtakudesuIframe(episodeUrl = '') {
+  if (!/^https?:\/\//i.test(String(episodeUrl || ''))) return null;
+  try {
+    const res = await axios.get(episodeUrl, {
+      timeout: 25000,
+      headers: {
+        Accept: 'text/html',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+      }
+    });
+    const html = String(res.data || '');
+    const match = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+    const src = (match?.[1] || '').trim();
+    return /^https?:\/\//i.test(src) ? src : null;
+  } catch {
+    return null;
+  }
+}
+
+async function anoboyGetHtml(pathname = '/') {
+  const base = getAnoboyBaseUrl();
+  const target = /^https?:\/\//i.test(pathname) ? pathname : `${base}${pathname.startsWith('/') ? '' : '/'}${pathname}`;
+  const response = await fetch(target, {
+    headers: {
+      Accept: 'text/html',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      Referer: `${base}/`
+    }
+  });
+  if (!response.ok) throw new Error(`Anoboy ${response.status}`);
+  return String(await response.text());
+}
+
+function parseAnoboyEpisodeMeta(url = '') {
+  const raw = String(url || '').trim();
+  const match = raw.match(/\/([^/?#]+)\/?$/);
+  const slug = (match?.[1] || '').toLowerCase();
+  if (!slug.includes('episode-')) return null;
+  const epMatch = slug.match(/episode-(\d{1,4})/);
+  const ep = epMatch ? Number(epMatch[1]) : null;
+  const title = slug
+    .replace(/-episode-\d{1,4}.*/, '')
+    .replace(/-subtitle-indonesia.*/, '')
+    .replace(/-/g, ' ')
+    .trim();
+  if (!title) return null;
+  return { title, ep };
+}
+
+async function resolveAnoboyEpisode(titleInput, requestedEp = 1) {
+  const titleCandidates = Array.from(new Set(
+    (Array.isArray(titleInput) ? titleInput : [titleInput])
+      .map((x) => String(x || '').trim())
+      .filter(Boolean)
+  ));
+
+  const pages = ['/', '/page/2/', '/page/3/'];
+  const links = new Set();
+  for (const page of pages) {
+    const html = await anoboyGetHtml(page).catch(() => '');
+    const matches = html.match(/href=["'](https?:\/\/anoboy\.[^"']+)["']/gi) || [];
+    for (const m of matches) {
+      const u = m.replace(/^href=["']|["']$/gi, '').trim();
+      if (/episode-\d{1,4}/i.test(u) && /subtitle-indonesia/i.test(u)) links.add(u);
+    }
+  }
+
+  if (!links.size) {
+    return { available: false, note: 'Anoboy: daftar episode kosong/upstream gagal.', sources: [] };
+  }
+
+  const ranked = Array.from(links)
+    .map((url) => {
+      const meta = parseAnoboyEpisodeMeta(url);
+      const score = meta
+        ? Math.max(...titleCandidates.map((candidate) => scoreTitleMatch(candidate, meta.title)))
+        : 0;
+      return { url, meta, _score: score };
+    })
+    .filter((x) => x.meta)
+    .sort((a, b) => b._score - a._score);
+
+  const sameEp = ranked.filter((x) => x.meta?.ep === Number(requestedEp));
+  const pick = (sameEp.find((x) => x._score >= 0.25) || sameEp[0])
+    || ranked.find((x) => x._score >= 0.30)
+    || ranked[0];
+
+  if (!pick?.url) {
+    return { available: false, note: 'Anoboy: judul tidak ditemukan.', sources: [] };
+  }
+
+  const html = await anoboyGetHtml(pick.url).catch(() => '');
+  const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+  const iframe = (iframeMatch?.[1] || '').trim();
+
+  if (!/^https?:\/\//i.test(iframe)) {
+    return { available: false, note: 'Anoboy: iframe stream tidak ditemukan.', sources: [] };
+  }
+
+  return {
+    available: true,
+    note: 'Anoboy iframe source ready',
+    sources: [{
+      url: iframe,
+      embed: iframe,
+      isM3U8: false,
+      filename: 'Anoboy Indo (iframe)',
+      resolution: 'auto',
+      isDub: false,
+      fanSub: 'indo',
+      sourceLang: 'id'
+    }]
+  };
+}
+
+async function resolveOtakudesuEpisode(titleInput, requestedEp = 1) {
+  if (!OTAKUDESU_API_BASE) {
+    return { available: false, note: 'Otakudesu API belum dikonfigurasi.', sources: [] };
+  }
+  return resolveAnoboyEpisode(titleInput, requestedEp);
+
+  const titleCandidates = Array.from(new Set(
+    (Array.isArray(titleInput) ? titleInput : [titleInput])
+      .map((x) => String(x || '').trim())
+      .filter(Boolean)
+  ));
+
+  let best = null;
+  let searchNetworkErrors = 0;
+  for (const candidateTitle of titleCandidates) {
+    const q = encodeURIComponent(candidateTitle);
+    let search;
+    try {
+      search = await otakudesuGet(`/search/${q}`);
+    } catch {
+      searchNetworkErrors += 1;
+      continue;
+    }
+    const rows = Array.isArray(search?.search_results) ? search.search_results : [];
+    if (!rows.length) continue;
+
+    const ranked = rows
+      .map((item) => ({ ...item, _score: scoreTitleMatch(candidateTitle, item?.title || '') }))
+      .sort((a, b) => b._score - a._score);
+
+    const winner = ranked.find((item) => item._score >= 0.30) || ranked[0];
+    if (winner?.id) {
+      best = winner;
+      break;
+    }
+  }
+
+  if (!best?.id) {
+    if (searchNetworkErrors >= Math.max(1, titleCandidates.length)) {
+      return { available: false, note: 'Otakudesu upstream tidak bisa diakses.', sources: [] };
+    }
+    return { available: false, note: 'Otakudesu: judul tidak ditemukan.', sources: [] };
+  }
+
+  const detail = await otakudesuGet(`/anime/${best.id}`).catch(() => ({ episode_list: [] }));
+  const episodes = Array.isArray(detail?.episode_list) ? detail.episode_list : [];
+  if (!episodes.length) {
+    return { available: false, note: 'Otakudesu: episode list kosong.', sources: [] };
+  }
+
+  const selected = episodes.find((row) => extractEpisodeNumber(row?.title) == requestedEp) || episodes[0];
+  if (!selected?.id) {
+    return { available: false, note: 'Otakudesu: id episode tidak ditemukan.', sources: [] };
+  }
+
+  const episodeId = normalizeOtakudesuEpisodeId(selected.id || selected.link || '');
+  if (!episodeId) {
+    return { available: false, note: 'Otakudesu: id episode tidak valid.', sources: [] };
+  }
+
+  const ep = await otakudesuGet(`/eps/${episodeId}/`).catch(() => ({}));
+  const streamRaw = ep?.link_stream || ep?.streamLink || null;
+  const stream = /^https?:\/\//i.test(String(streamRaw || '').trim()) ? String(streamRaw).trim() : null;
+
+  if (stream) {
+    return {
+      available: true,
+      note: 'Otakudesu stream source ready',
+      sources: [{
+        url: stream,
+        embed: stream,
+        isM3U8: String(stream).includes('.m3u8'),
+        filename: 'Otakudesu Indo',
+        resolution: 'auto',
+        isDub: false,
+        fanSub: 'indo',
+        sourceLang: 'id'
+      }]
+    };
+  }
+
+  const iframe = await extractOtakudesuIframe(selected.link || selected.id || '');
+  if (iframe) {
+    return {
+      available: true,
+      note: 'Otakudesu iframe source ready',
+      sources: [{
+        url: iframe,
+        embed: iframe,
+        isM3U8: false,
+        filename: 'Otakudesu Indo (iframe)',
+        resolution: 'auto',
+        isDub: false,
+        fanSub: 'indo',
+        sourceLang: 'id'
+      }]
+    };
+  }
+
+  return { available: false, note: 'Otakudesu: link stream dan iframe kosong.', sources: [] };
 }
 
 app.get('/api/health', async (_req, res) => {
@@ -367,20 +752,14 @@ app.get('/api/anime/:id/detail', async (req, res) => {
       return sendError(res, req, 400, 'INVALID_ANIME_ID', 'Invalid anime id');
     }
 
-    const [detail, episodes, charactersRes] = await Promise.all([
+    const [detail, episodeList, charactersRes] = await Promise.all([
       jikanGet(`/anime/${id}/full`),
-      jikanGet(`/anime/${id}/episodes`, { page: 1 }),
+      getAllAnimeEpisodes(id),
       jikanGet(`/anime/${id}/characters`).catch(() => ({ data: [] }))
     ]);
 
     const anime = mapAnime(detail.data);
     const synopsis = detail.data?.synopsis || 'No synopsis available.';
-
-    const episodeList = (episodes.data || []).slice(0, 24).map((ep, idx) => ({
-      num: idx + 1,
-      title: ep.title || `Episode ${idx + 1}`,
-      duration: '24 min'
-    }));
 
     const cast = ((charactersRes?.data) || []).slice(0, 10).map((row) => ({
       character: row.character?.name || '-',
@@ -417,18 +796,13 @@ app.get('/api/watch/:id', async (req, res) => {
     }
     const safeEp = Number.isFinite(ep) && ep > 0 ? Math.floor(ep) : 1;
 
-    const [detail, episodes, top] = await Promise.all([
+    const [detail, episodeList, top] = await Promise.all([
       jikanGet(`/anime/${id}/full`),
-      jikanGet(`/anime/${id}/episodes`, { page: 1 }),
+      getAllAnimeEpisodes(id),
       jikanGet('/top/anime', { limit: 10 })
     ]);
 
     const anime = mapAnime(detail.data);
-    const episodeList = (episodes.data || []).slice(0, 24).map((item, idx) => ({
-      num: idx + 1,
-      title: item.title || `Episode ${idx + 1}`,
-      duration: '24 min'
-    }));
 
     let pahe = {
       available: false,
@@ -482,11 +856,18 @@ app.get('/api/watch/:id', async (req, res) => {
     const trailerEmbed = normalizeEmbedUrl(detail.data?.trailer?.embed_url || detail.data?.trailer?.url)
       || fallbackSearchEmbed(anime.title);
     const paheSources = Array.isArray(pahe.play?.sources) ? pahe.play.sources : [];
-    const streamSources = paheSources.filter((source) => source?.isDub !== true);
+    const paheSubEngSources = paheSources
+      .filter((source) => source?.isDub !== true)
+      .map((source) => ({ ...source, fanSub: source?.fanSub || 'eng', sourceLang: 'en' }));
 
-    if (paheSources.length > 0 && streamSources.length === 0) {
+    if (paheSources.length > 0 && paheSubEngSources.length === 0) {
       pahe.note = 'Only English dub sources found; Japanese audio source unavailable for this episode';
     }
+
+    const subIndoSourceId = 'disabled';
+    const indo = { available: false, note: 'Sub INDO dinonaktifkan.', sources: [] };
+
+    const streamSources = [...paheSubEngSources, ...(indo.sources || [])];
 
     if (!streamSources.length && trailerEmbed) {
       streamSources.push({
@@ -500,19 +881,28 @@ app.get('/api/watch/:id', async (req, res) => {
       });
     }
 
+    const providerNotes = [
+      `Sub ENG: ${pahe.note}`,
+      `Sub INDO: ${indo.note}`
+    ].filter(Boolean).join(' | ');
+
     res.json({
       anime,
       currentEpisode: safeEp,
       episodes: episodeList,
       related: (top.data || []).slice(0, 6).map(mapAnime),
       streamProvider: {
-        source: 'animepahe-api',
-        available: pahe.available || Boolean(streamSources.length),
-        note: pahe.available ? pahe.note : (trailerEmbed ? 'Fallback to official trailer embed' : pahe.note),
+        source: `animepahe+${subIndoSourceId}`,
+        available: Boolean(streamSources.length),
+        note: streamSources.length ? providerNotes : (trailerEmbed ? `Fallback trailer. ${providerNotes}` : providerNotes),
         selectedAnimeSession: pahe.selectedAnime?.session || null,
         selectedEpisodeSession: pahe.selectedEpisode?.session || null,
         sources: streamSources,
-        downloads: pahe.play?.downloads || []
+        downloads: pahe.play?.downloads || [],
+        providers: {
+          subEng: { source: 'animepahe-api', available: paheSubEngSources.length > 0, count: paheSubEngSources.length, note: pahe.note, sources: paheSubEngSources },
+          subIndo: { source: subIndoSourceId, available: indo.available, count: (indo.sources || []).length, note: indo.note, sources: (indo.sources || []) }
+        }
       }
     });
   } catch (error) {

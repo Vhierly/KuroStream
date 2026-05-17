@@ -44,6 +44,10 @@
           <div class="row">
             <button class="btn" id="prev-ep">⏮ Previous</button>
             <button class="btn" id="next-ep">Next ⏭</button>
+            <select id="source-select" class="select quality-select">
+              <option value="en">Source: EN</option>
+              <option value="id">Source: ID</option>
+            </select>
             <select id="quality-select" class="select quality-select">
               <option value="0">Auto quality</option>
             </select>
@@ -75,6 +79,7 @@
       const saved = (await UI.getSetting("autonext", "0")) === "1";
       const autoSwitch = UI.el("#auto-next");
       const qualitySelect = UI.el("#quality-select");
+      const sourceSelect = UI.el("#source-select");
       if (saved) autoSwitch.classList.add("on");
 
       autoSwitch.onclick = async () => {
@@ -93,6 +98,7 @@
       let watch = null;
       let hls = null;
       let selectedQualityIndex = 0;
+      let selectedSourceLang = 'en';
       let progressTimer = null;
       let shouldAutoPlayAfterLoad = false;
       let autoNextTriggered = false;
@@ -170,9 +176,14 @@
         video.onended = goNextEpisode;
       };
 
+      const getSourcesByLang = () => {
+        const providers = watch?.streamProvider?.providers || {};
+        return providers?.subEng?.sources || [];
+      };
+
       const applySource = (sourceIndex = 0) => {
         const screen = UI.el(".player-screen");
-        const sources = watch?.streamProvider?.sources || [];
+        const sources = getSourcesByLang();
         const selected = sources[sourceIndex] || sources[0];
         selectedQualityIndex = sourceIndex;
 
@@ -303,7 +314,7 @@
       };
 
       const renderQualityOptions = () => {
-        const sources = watch?.streamProvider?.sources || [];
+        const sources = getSourcesByLang();
         if (!sources.length) {
           qualitySelect.innerHTML = `<option value="0">No quality available</option>`;
           qualitySelect.disabled = true;
@@ -314,11 +325,14 @@
         qualitySelect.innerHTML = sources
           .map((s, idx) => {
             const label = /^\d+$/.test(String(s.resolution || '')) ? `${s.resolution}p` : (s.resolution || `Quality ${idx + 1}`);
-            return `<option value="${idx}">${esc(label)} • ${esc(s.fanSub || 'sub')}</option>`;
+            return `<option value="${idx}">${esc(label)} • ${esc(s.fanSub || (selectedSourceLang === 'id' ? 'indo' : 'eng'))}</option>`;
           })
           .join('');
         qualitySelect.value = String(Math.min(selectedQualityIndex, sources.length - 1));
       };
+
+      const EPISODES_PER_PAGE = 50;
+      let episodeListPage = 1;
 
       const loadWatch = async () => {
         watch = await ApiClient.getWatchContext(animeId, episode);
@@ -327,35 +341,88 @@
         UI.el("#related").innerHTML = watch.related.map(UI.card).join("");
         UI.attachCardNavigation("#related");
 
-        const episodeThumb = watch?.anime?.image ? String(watch.anime.image).replace(/'/g, "%27") : '';
-        UI.el("#ep-list").innerHTML = watch.episodes.map((item) => `
-          <article class="list-item">
-            <div class="thumb ${episodeThumb ? 'thumb-image' : ''}" ${episodeThumb ? `style="background-image:url('${episodeThumb}')"` : ''}></div>
-            <div>
-              <p class="title">E${esc(item.num)}: ${esc(item.title)}</p>
-              <p class="meta"><span>${esc(item.duration)}</span></p>
-            </div>
-            <button class="btn" data-ep="${item.num}">Play</button>
-          </article>
-        `).join("");
+        const renderEpisodeList = () => {
+          const total = watch.episodes.length;
+          const totalPages = Math.max(1, Math.ceil(total / EPISODES_PER_PAGE));
+          episodeListPage = Math.min(Math.max(1, episodeListPage), totalPages);
+          const start = (episodeListPage - 1) * EPISODES_PER_PAGE;
+          const rows = watch.episodes.slice(start, start + EPISODES_PER_PAGE);
+          const episodeThumb = watch?.anime?.image ? String(watch.anime.image).replace(/'/g, "%27") : '';
 
-        document.querySelectorAll("[data-ep]").forEach((button) => {
-          button.onclick = async () => {
-            saveRealtimeProgress();
-            episode = Number(button.dataset.ep);
-            await playCurrentEpisode();
-          };
-        });
+          UI.el("#ep-list").innerHTML = `
+            <div class="row" style="justify-content:space-between;margin-bottom:10px;">
+              <span class="muted">Episode ${start + 1}-${Math.min(start + EPISODES_PER_PAGE, total)} dari ${total}</span>
+              <div class="row">
+                <button class="btn" id="watch-ep-prev" ${episodeListPage <= 1 ? 'disabled' : ''}>← Prev</button>
+                <span class="muted" style="align-self:center;">Page ${episodeListPage}/${totalPages}</span>
+                <button class="btn" id="watch-ep-next" ${episodeListPage >= totalPages ? 'disabled' : ''}>Next →</button>
+              </div>
+            </div>
+            ${rows.map((item) => `
+              <article class="list-item">
+                <div class="thumb ${episodeThumb ? 'thumb-image' : ''}" ${episodeThumb ? `style="background-image:url('${episodeThumb}')"` : ''}></div>
+                <div>
+                  <p class="title">E${esc(item.num)}: ${esc(item.title)}</p>
+                  <p class="meta"><span>${esc(item.duration)}</span></p>
+                </div>
+                <button class="btn" data-ep="${item.num}">Play</button>
+              </article>
+            `).join("")}
+          `;
+
+          const prev = UI.el('#watch-ep-prev');
+          const next = UI.el('#watch-ep-next');
+          if (prev) prev.onclick = () => { episodeListPage -= 1; renderEpisodeList(); };
+          if (next) next.onclick = () => { episodeListPage += 1; renderEpisodeList(); };
+
+          document.querySelectorAll("[data-ep]").forEach((button) => {
+            button.onclick = async () => {
+              saveRealtimeProgress();
+              episode = Number(button.dataset.ep);
+              await playCurrentEpisode();
+            };
+          });
+        };
+
+        episodeListPage = Math.ceil(Math.max(1, episode) / EPISODES_PER_PAGE);
+        renderEpisodeList();
+
+        const providers = watch?.streamProvider?.providers || {};
+        const hasEn = Array.isArray(providers?.subEng?.sources) && providers.subEng.sources.length > 0;
+        const mapProviderName = (sourceId) => {
+          const v = String(sourceId || '').toLowerCase();
+          if (v.includes('animepahe')) return 'AnimePahe';
+          return sourceId || 'Unknown';
+        };
+        const subEngLabel = mapProviderName(providers?.subEng?.source || 'animepahe-api');
+
+        if (sourceSelect) {
+          sourceSelect.innerHTML = [
+            `<option value="en">Source: EN (${esc(subEngLabel)}) ${hasEn ? '' : '(empty)'}</option>`
+          ].join('');
+
+          selectedSourceLang = 'en';
+          sourceSelect.value = selectedSourceLang;
+        }
 
         saveRealtimeProgress();
         renderQualityOptions();
-        applySource(Math.min(selectedQualityIndex, (watch?.streamProvider?.sources || []).length - 1));
+        applySource(Math.min(selectedQualityIndex, getSourcesByLang().length - 1));
       };
 
       qualitySelect.onchange = () => {
         selectedQualityIndex = Number(qualitySelect.value || 0);
         applySource(selectedQualityIndex);
       };
+
+      if (sourceSelect) {
+        sourceSelect.onchange = () => {
+          selectedSourceLang = 'en';
+          selectedQualityIndex = 0;
+          renderQualityOptions();
+          applySource(0);
+        };
+      }
 
       UI.el("#prev-ep").onclick = async () => {
         saveRealtimeProgress();
