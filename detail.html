@@ -91,17 +91,40 @@
           cover.textContent = `${detail.anime.genre} • ${detail.anime.year || '-'}`;
         }
 
-        const tabs = {
-          episodes: () => detail.episodes.map((episode) => `
-            <article class="list-item">
-              <div class="thumb ${detail.anime.image ? 'thumb-image' : ''}" ${detail.anime.image ? `style="background-image:url('${String(detail.anime.image).replace(/'/g, "%27")}')"` : ''}></div>
-              <div>
-                <p class="title">Episode ${episode.num} — ${episode.title}</p>
-                <p class="meta"><span>${episode.duration}</span></p>
+        const EPISODES_PER_PAGE = 50;
+        let episodePage = 1;
+
+        const renderEpisodeTab = () => {
+          const totalEpisodes = detail.episodes.length;
+          const totalPages = Math.max(1, Math.ceil(totalEpisodes / EPISODES_PER_PAGE));
+          episodePage = Math.min(Math.max(1, episodePage), totalPages);
+          const start = (episodePage - 1) * EPISODES_PER_PAGE;
+          const rows = detail.episodes.slice(start, start + EPISODES_PER_PAGE);
+
+          return `
+            <div class="row" style="justify-content:space-between;margin-bottom:10px;">
+              <span class="muted">Episode ${start + 1}-${Math.min(start + EPISODES_PER_PAGE, totalEpisodes)} dari ${totalEpisodes}</span>
+              <div class="row">
+                <button class="btn" id="ep-prev-page" ${episodePage <= 1 ? 'disabled' : ''}>← Prev</button>
+                <span class="muted" style="align-self:center;">Page ${episodePage}/${totalPages}</span>
+                <button class="btn" id="ep-next-page" ${episodePage >= totalPages ? 'disabled' : ''}>Next →</button>
               </div>
-              <button class="btn" onclick="location.href='watch.html?id=${animeId}&ep=${episode.num}'">Play</button>
-            </article>
-          `).join(""),
+            </div>
+            ${rows.map((episode) => `
+              <article class="list-item">
+                <div class="thumb ${detail.anime.image ? 'thumb-image' : ''}" ${detail.anime.image ? `style="background-image:url('${String(detail.anime.image).replace(/'/g, "%27")}')"` : ''}></div>
+                <div>
+                  <p class="title">Episode ${episode.num} — ${episode.title}</p>
+                  <p class="meta"><span>${episode.duration}</span></p>
+                </div>
+                <button class="btn" onclick="location.href='watch.html?id=${animeId}&ep=${episode.num}'">Play</button>
+              </article>
+            `).join('')}
+          `;
+        };
+
+        const tabs = {
+          episodes: renderEpisodeTab,
 
           info: () => `
             <article class="card">
@@ -134,6 +157,12 @@
 
         const renderTab = (key = "episodes") => {
           UI.el("#tab-content").innerHTML = tabs[key]();
+          if (key === 'episodes') {
+            const prevBtn = UI.el('#ep-prev-page');
+            const nextBtn = UI.el('#ep-next-page');
+            if (prevBtn) prevBtn.onclick = () => { episodePage -= 1; renderTab('episodes'); };
+            if (nextBtn) nextBtn.onclick = () => { episodePage += 1; renderTab('episodes'); };
+          }
         };
 
         renderTab();
