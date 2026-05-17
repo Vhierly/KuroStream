@@ -12,24 +12,41 @@
 </head>
 <body>
   <main class="app-shell">
-    <header class="topbar">
+<header class="topbar">
       <div class="brand">Kuro<span>Stream</span></div>
       <nav class="nav">
-        <a href="home.html">Home</a><a href="explore.html">Explore</a><a href="my-list.html">My List</a><a href="login.html">Login</a><a id="auth-badge" href="login.html">Login</a>
+        <a href="index.html">Home</a>
+        <a href="explore.html">Explore</a>
+        <a href="detail.html">Details</a>
+        <a href="watch.html">Watch</a>
+        <a href="my-list.html">My List</a>
+        <a id="auth-badge" href="login.html">Login</a>
       </nav>
-      <label class="search"><span>🔎</span><input id="global-search" placeholder="Search anime..."></label>
+      <label class="search">
+        <span>⌕</span>
+        <input id="global-search" placeholder="Search anime...">
+      </label>
     </header>
 
-    <section class="section card"><div class="card-body">
-      <h1 class="page-title">Login / Register</h1>
-      <p class="muted">Tinggal isi email + password. Tidak perlu setup key/domain.</p>
-      <input id="email" class="input" placeholder="Email">
-      <input id="password" type="password" class="input" placeholder="Password (min 6)">
-      <div class="row">
+    <section class="section card auth-card"><div class="card-body auth-form">
+      <div>
+        <h1 class="page-title">Login / Register</h1>
+        <p class="muted">Sync your watch list and continue watching across sessions.</p>
+      </div>
+      <label class="field">
+        <span>Email</span>
+        <input id="email" class="input" type="email" placeholder="you@example.com" autocomplete="email">
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input id="password" type="password" class="input" placeholder="Enter password" autocomplete="current-password">
+        <small class="muted">Minimum 6 characters.</small>
+      </label>
+      <div class="row auth-actions">
         <button id="login-btn" class="btn primary">Login</button>
         <button id="register-btn" class="btn">Register</button>
       </div>
-      <p id="status" class="muted"></p>
+      <p id="status" class="muted status-line"></p>
     </div></section>
   </main>
 

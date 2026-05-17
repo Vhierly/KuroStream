@@ -14,18 +14,18 @@
 </head>
 <body>
   <main class="app-shell">
-    <header class="topbar">
+<header class="topbar">
       <div class="brand">Kuro<span>Stream</span></div>
       <nav class="nav">
-        <a href="home.html">Home</a>
+        <a href="index.html">Home</a>
         <a href="explore.html">Explore</a>
         <a href="detail.html">Details</a>
         <a href="watch.html">Watch</a>
         <a href="my-list.html">My List</a>
-              <a id="auth-badge" href="login.html">Login</a>
+        <a id="auth-badge" href="login.html">Login</a>
       </nav>
       <label class="search">
-        <span>🔎</span>
+        <span>⌕</span>
         <input id="global-search" placeholder="Search anime...">
       </label>
     </header>
@@ -33,13 +33,28 @@
     <section class="page-header">
       <div>
         <h1 class="page-title">Explore Catalog</h1>
-        <p class="page-subtitle">Browse by genre, discover top-rated titles, and filter by release year.</p>
+        <p class="page-subtitle">Browse AnimePahe airing, search, queue, and A-Z catalog modes.</p>
       </div>
       <button id="open-filter" class="btn">Advanced Filters</button>
     </section>
 
     <section class="filters">
+      <select id="mode" class="select">
+        <option value="airing">Airing</option>
+        <option value="search">Search</option>
+        <option value="queue">Queue</option>
+        <option value="az">A-Z List</option>
+      </select>
       <input id="q" class="input" placeholder="Search by title...">
+      <select id="tab" class="select">
+        <option value="all">All letters</option>
+        <option value="hash"># / 0-9</option>
+        <option>A</option><option>B</option><option>C</option><option>D</option><option>E</option><option>F</option>
+        <option>G</option><option>H</option><option>I</option><option>J</option><option>K</option><option>L</option>
+        <option>M</option><option>N</option><option>O</option><option>P</option><option>Q</option><option>R</option>
+        <option>S</option><option>T</option><option>U</option><option>V</option><option>W</option><option>X</option>
+        <option>Y</option><option>Z</option>
+      </select>
       <select id="genre" class="select">
         <option>All</option>
         <option>Action</option>
@@ -52,6 +67,8 @@
       <select id="sort" class="select">
         <option value="rating">Sort by rating</option>
         <option value="year">Sort by release year</option>
+        <option value="title">Sort by title</option>
+        <option value="episodes">Sort by episodes</option>
       </select>
       <button id="clear-filter" class="btn ghost">Reset</button>
     </section>
@@ -69,6 +86,7 @@
     <section class="section">
       <div id="catalog" class="grid cards-5"></div>
       <div id="pager"></div>
+      <div id="load-more-sentinel" style="min-height:1px"></div>
     </section>
   </main>
 
@@ -78,64 +96,104 @@
     document.addEventListener("DOMContentLoaded", () => {
       const state = {
         q: new URLSearchParams(location.search).get("q") || "",
+        mode: "airing",
+        tab: "all",
         genre: "All",
         sort: "rating",
         page: 1,
-        perPage: 10
+        perPage: 10,
+        totalPages: 1,
+        items: [],
+        loading: false
       };
 
       const inputQ = UI.el("#q");
       inputQ.value = state.q;
 
-      const render = async () => {
-        const rows = await ApiClient.getCatalog({ q: state.q, genre: state.genre, sort: state.sort });
-        const total = Math.max(1, Math.ceil(rows.length / state.perPage));
-        state.page = Math.min(state.page, total);
-        const slice = rows.slice((state.page - 1) * state.perPage, state.page * state.perPage);
+      const render = async ({ append = false } = {}) => {
+        if (state.loading) return;
+        state.loading = true;
+        UI.el("#pager").innerHTML = '<div class="pagination"><span class="muted">Loading...</span></div>';
+        try {
+          const result = await ApiClient.getCatalog({ q: state.q, mode: state.mode, tab: state.tab, genre: state.genre, sort: state.sort, page: state.page, perPage: state.perPage });
+          const rows = Array.isArray(result) ? result : (result.items || []);
+          const pagination = Array.isArray(result) ? null : result.pagination;
+          const total = Math.max(1, Number(pagination?.totalPages || Math.ceil((pagination?.totalItems || rows.length) / state.perPage) || 1));
+          state.page = Math.min(Number(pagination?.page || state.page), total);
+          state.totalPages = total;
+          const slice = pagination ? rows : rows.slice((state.page - 1) * state.perPage, state.page * state.perPage);
+          state.items = append ? [...state.items, ...slice] : slice;
 
-        UI.el("#catalog").innerHTML = slice.map(UI.card).join("");
-        UI.attachCardNavigation("#catalog");
-        UI.el("#pager").innerHTML = UI.pager(state.page, total);
+          UI.el("#catalog").innerHTML = state.items.map(UI.card).join("");
+          UI.attachCardNavigation("#catalog");
+          UI.el("#pager").innerHTML = state.page < state.totalPages
+            ? `<div class="pagination"><button class="btn ghost" id="load-more">Load more</button><span class="muted">Page ${state.page}/${state.totalPages}</span></div>`
+            : `<div class="pagination"><span class="muted">All loaded • ${state.items.length} titles</span></div>`;
 
-        document.querySelectorAll("[data-page]").forEach((button) => {
-          button.onclick = () => {
-            state.page = Number(button.dataset.page);
-            render();
+          const loadMore = UI.el("#load-more");
+          if (loadMore) loadMore.onclick = () => {
+            state.page += 1;
+            render({ append: true });
           };
-        });
+        } catch (error) {
+          UI.openModal("Error", error.message || "Failed to load catalog.");
+        } finally {
+          state.loading = false;
+        }
+      };
+
+      const resetAndRender = () => {
+        state.page = 1;
+        state.items = [];
+        render();
       };
 
       inputQ.addEventListener("input", (event) => {
         state.q = event.target.value.trim();
-        state.page = 1;
-        render();
+        resetAndRender();
       });
 
       UI.el("#genre").onchange = (event) => {
         state.genre = event.target.value;
-        state.page = 1;
         document.querySelectorAll(".chip").forEach((chip) => {
           chip.classList.toggle("active", chip.dataset.genre === state.genre);
         });
-        render();
+        resetAndRender();
+      };
+
+      UI.el("#mode").onchange = (event) => {
+        state.mode = event.target.value;
+        if (state.mode === 'search' && !state.q) inputQ.focus();
+        resetAndRender();
+      };
+
+      UI.el("#tab").onchange = (event) => {
+        state.tab = event.target.value;
+        if (state.mode !== 'az') {
+          state.mode = 'az';
+          UI.el("#mode").value = 'az';
+        }
+        resetAndRender();
       };
 
       UI.el("#sort").onchange = (event) => {
         state.sort = event.target.value;
-        state.page = 1;
-        render();
+        resetAndRender();
       };
 
       UI.el("#clear-filter").onclick = () => {
         state.q = "";
+        state.mode = "airing";
+        state.tab = "all";
         state.genre = "All";
         state.sort = "rating";
-        state.page = 1;
         inputQ.value = "";
+        UI.el("#mode").value = "airing";
+        UI.el("#tab").value = "all";
         UI.el("#genre").value = "All";
         UI.el("#sort").value = "rating";
         document.querySelectorAll(".chip").forEach((chip) => chip.classList.toggle("active", chip.dataset.genre === "All"));
-        render();
+        resetAndRender();
       };
 
       document.querySelectorAll(".chip").forEach((chip) => {
@@ -144,14 +202,20 @@
           chip.classList.add("active");
           state.genre = chip.dataset.genre;
           UI.el("#genre").value = state.genre;
-          state.page = 1;
-          render();
+          resetAndRender();
         };
       });
 
       UI.el("#open-filter").onclick = () => {
         UI.openModal("Advanced Filters", "Hook year, studio, status, and score filters to your backend query parameters.");
       };
+
+      new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting) && !state.loading && state.page < state.totalPages) {
+          state.page += 1;
+          render({ append: true });
+        }
+      }, { rootMargin: "500px" }).observe(UI.el("#load-more-sentinel"));
 
       render();
     });

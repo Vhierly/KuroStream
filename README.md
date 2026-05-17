@@ -1,40 +1,76 @@
 # KuroStream
 
-KuroStream is an anime streaming web app prototype with a Node.js backend.
+KuroStream is an AnimePahe-powered anime streaming web app prototype with a static frontend, KuroStream Express backend, and AnimePahe proxy backend.
+
+## Live Deployments
+
+- Frontend: https://kuurostreaam.vercel.app
+- Kuro backend: https://kurostream-backend.vercel.app
+- AnimePahe API backend: https://animepahe-api-ashen.vercel.app
 
 ## Features
 
-- Home, Explore, Detail, Watch, and My List pages
-- Jikan API integration for anime metadata
-- AnimePahe proxy integration for stream source lookup
-- Continue Watching + My List persistence via Dexie.js (IndexedDB)
-- Supabase Auth login/register + cross-device sync for My List and Continue Watching
+- Home, Explore, Detail, Watch, My List, and Login pages
+- AnimePahe catalog modes:
+  - Airing
+  - Search
+  - Queue
+  - A-Z list
+- AnimePahe poster cover enrichment so cards use anime poster art instead of episode screenshots
+- Anime detail page with AnimePahe metadata:
+  - synopsis
+  - Japanese title
+  - synonyms
+  - aired date
+  - duration
+  - genres
+  - studio/status/type/season
+  - trailer link when available
+  - recommendations when available
+- Watch page with:
+  - episode list
+  - previous/next episode controls
+  - SUB/DUB source filter
+  - quality picker with resolution/fansub/size labels
+  - downloads modal for AnimePahe download links when returned
+  - auto-next toggle
+  - continue-watching progress save
+- My List + Continue Watching persistence via Dexie.js / IndexedDB
+- Optional Supabase Auth login/register + cross-device sync
 - Health/readiness/liveness endpoints for deployment checks
 - Rate limiting, CORS controls, structured request logging
 
 ## Project Structure
 
-- `backend/` — Express API server, health checks, upstream adapters
-- `css/` — styles
-- `js/` — frontend scripts
+- `backend/` — KuroStream Express API server, health checks, AnimePahe integration, Vercel backend config
+- `api/[...route].js` — root Vercel serverless API/proxy shim
+- `css/` — frontend styles
+- `js/` — frontend scripts/components/API client
 - `*.html` — frontend pages
 
-## Backend Endpoints
+## Main Backend Endpoints
 
 - `GET /api/live` — liveness
-- `GET /api/ready` — readiness (upstream dependency check)
-- `GET /api/health` — combined health diagnostics
+- `GET /api/ready` — readiness / upstream dependency check
+- `GET /api/health` — combined diagnostics
 - `GET /api/home`
-- `GET /api/catalog`
-- `GET /api/anime/:id/detail`
-- `GET /api/watch/:id?ep=1`
+- `GET /api/catalog?mode=airing|search|queue|az&q=&tab=&page=&perPage=`
+- `GET /api/anime/:id/detail?session=&title=`
+- `GET /api/watch/:id?ep=&session=&title=`
 
-Notes:
-- `GET /api/home` returns `featured`, `trending`, and `latest`.
-- Continue Watching and My List are cached locally in Dexie.
-- If user is logged in, those states are synced to Supabase per account (cross-device).
+## AnimePahe Proxy Endpoints Used
+
+- `GET /api/airing?page=`
+- `GET /api/search?q=&page=`
+- `GET /api/anime?tab=`
+- `GET /api/queue`
+- `GET /api/:session`
+- `GET /api/:session/releases?sort=&page=`
+- `GET /api/play/:session?episodeId=&downloads=`
 
 ## Local Run
+
+Run KuroStream backend:
 
 ```bash
 cd backend
@@ -42,7 +78,17 @@ npm ci
 npm run start
 ```
 
-Default: `http://127.0.0.1:8787`
+Default local URL:
+
+```txt
+http://127.0.0.1:8787
+```
+
+If using a separate AnimePahe proxy, set:
+
+```bash
+export ANIMEPAHE_PROXY_BASE="http://127.0.0.1:3030/api"
+```
 
 ## Test
 
@@ -52,35 +98,45 @@ npm run lint
 npm test
 ```
 
-## Deploy (Vercel Fullstack)
+## Vercel Deployment
 
-This repo is ready for full Vercel deployment:
+Current production topology:
 
-- Frontend: static HTML/CSS/JS from project root
-- API: serverless function at `api/[...route].js`
+1. AnimePahe API backend deployed separately.
+2. KuroStream backend deployed from `backend/`.
+3. Frontend deployed from repo root and forwards `/api/*` to KuroStream backend using `KURO_BACKEND_BASE`.
 
-Required Vercel environment variable (choose one mode):
+Required frontend env:
 
-- `ANIMEPAHE_PROXY_BASE` (example: `https://your-proxy-domain/api`) for direct AnimePahe proxy mode
-- `KURO_BACKEND_BASE` (example: `https://your-wsl-tunnel.trycloudflare.com`) to forward all `/api/*` traffic to your running WSL backend
+```txt
+KURO_BACKEND_BASE=https://kurostream-backend.vercel.app
+```
+
+Required Kuro backend env:
+
+```txt
+ANIMEPAHE_PROXY_BASE=https://animepahe-api-ashen.vercel.app/api
+```
 
 Optional envs:
 
-- `JIKAN_BASE`
-- `JIKAN_CACHE_TTL_MS`
-- `JIKAN_CACHE_MAX_SIZE`
-- `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
+```txt
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+JIKAN_BASE=
+JIKAN_CACHE_TTL_MS=
+JIKAN_CACHE_MAX_SIZE=
+```
 
-Security note:
-- Do not hardcode Supabase keys in frontend source.
-- Frontend reads config from `/api/config` (server env) or manual input on `login.html`.
-- Never commit service_role keys.
+## Security Notes
 
-## Legacy Render Files
+- Never commit Vercel tokens, GitHub tokens, or Supabase service role keys.
+- Frontend should not hardcode secrets.
+- Supabase config is read via `/api/config` or manually entered on `login.html`.
+- Only public anon keys should be used client-side.
 
-Render artifacts are still present in `backend/` if you need fallback deploy there.
+## Known Runtime Notes
 
-## Notes
-
-This project is currently optimized as a deployable prototype and can be extended with stronger CI/release automation and full streaming provider runtime validation.
+- AnimePahe availability can depend on upstream network/Cloudflare behavior.
+- Some episodes may return no playable stream; UI falls back to trailer/empty states.
+- Download links appear only when AnimePahe proxy returns them for selected episode.

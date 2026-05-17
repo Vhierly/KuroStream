@@ -219,12 +219,18 @@ window.UI = (() => {
     return `<div class="poster">${escapeHtml(a.genre)} • ${escapeHtml(a.year || '-')}</div>`;
   };
 
+  const episodeLabel = (value, status = '') => {
+    const count = Number(value || 0);
+    if (count > 0) return `${count} eps`;
+    return String(status).toLowerCase() === 'ongoing' ? 'Ongoing' : 'TBA';
+  };
+
   const card = (a) => `
-    <article class="card card-link" data-id="${a.id}">
+    <article class="card card-link" data-id="${a.id}" data-session="${escapeHtml(a.session || '')}" data-title="${escapeHtml(a.title || '')}">
       ${posterBlock(a)}
       <div class="card-body">
         <div class="title">${escapeHtml(a.title)}</div>
-        <div class="meta"><span>⭐ ${escapeHtml(a.rating || '-')}</span><span>${escapeHtml(a.eps || 0)} eps</span><span class="badge">${escapeHtml(a.status || '-')}</span></div>
+        <div class="meta">${Number(a.rating) > 0 ? `<span>⭐ ${escapeHtml(a.rating)}</span>` : ''}<span>${escapeHtml(episodeLabel(a.eps, a.status))}</span><span class="badge">${escapeHtml(a.status || '-')}</span></div>
       </div>
     </article>`;
 
@@ -232,15 +238,33 @@ window.UI = (() => {
     document.querySelectorAll(`${rootSelector} .card-link`).forEach((node) => {
       node.onclick = () => {
         const id = node.dataset.id;
-        location.href = `detail.html?id=${id}`;
+        const session = node.dataset.session || '';
+        const title = node.dataset.title || '';
+        const query = new URLSearchParams({ id });
+        if (session) query.set('session', session);
+        if (title) query.set('title', title);
+        location.href = `detail.html?${query.toString()}`;
       };
     });
   };
 
   const pager = (page, total) => {
-    let html = '';
-    for (let i = 1; i <= total; i++) html += `<button class="btn ghost ${i === page ? 'active' : ''}" data-page="${i}">${i}</button>`;
-    return `<div class="pagination">${html}</div>`;
+    const current = Math.max(1, Number(page || 1));
+    const max = Math.max(1, Number(total || 1));
+    const pages = new Set([1, max, current, current - 1, current + 1]);
+    if (current <= 3) [2, 3, 4].forEach((n) => pages.add(n));
+    if (current >= max - 2) [max - 3, max - 2, max - 1].forEach((n) => pages.add(n));
+    const nums = [...pages].filter((n) => n >= 1 && n <= max).sort((a, b) => a - b);
+    let last = 0;
+    const parts = [];
+    if (current > 1) parts.push(`<button class="btn ghost" data-page="${current - 1}">‹ Prev</button>`);
+    nums.forEach((n) => {
+      if (n - last > 1) parts.push('<span class="pager-gap">…</span>');
+      parts.push(`<button class="btn ghost ${n === current ? 'active' : ''}" data-page="${n}">${n}</button>`);
+      last = n;
+    });
+    if (current < max) parts.push(`<button class="btn ghost" data-page="${current + 1}">Next ›</button>`);
+    return `<div class="pagination">${parts.join('')}</div>`;
   };
 
   const openModal = (title, content) => {

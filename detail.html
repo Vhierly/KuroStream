@@ -14,18 +14,18 @@
 </head>
 <body>
   <main class="app-shell">
-    <header class="topbar">
+<header class="topbar">
       <div class="brand">Kuro<span>Stream</span></div>
       <nav class="nav">
-        <a href="home.html">Home</a>
+        <a href="index.html">Home</a>
         <a href="explore.html">Explore</a>
         <a href="detail.html">Details</a>
         <a href="watch.html">Watch</a>
         <a href="my-list.html">My List</a>
-              <a id="auth-badge" href="login.html">Login</a>
+        <a id="auth-badge" href="login.html">Login</a>
       </nav>
       <label class="search">
-        <span>🔎</span>
+        <span>⌕</span>
         <input id="global-search" placeholder="Search anime...">
       </label>
     </header>
@@ -61,6 +61,14 @@
       </div>
       <div id="tab-content" class="section"></div>
     </section>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>Recommended</h2>
+        <a href="explore.html">Explore more →</a>
+      </div>
+      <div id="recommendations" class="grid cards-5"></div>
+    </section>
   </main>
 
   <div id="modal" class="modal-backdrop"></div>
@@ -71,14 +79,19 @@
       try {
         const query = new URLSearchParams(location.search);
         const animeId = Number(query.get("id") || 2);
-        const detail = await ApiClient.getAnimeDetail(animeId);
+        const animeSession = query.get("session") || "";
+        const animeTitle = query.get("title") || "";
+        const detail = await ApiClient.getAnimeDetail(animeId, { session: animeSession, title: animeTitle });
+        const watchQueryBase = new URLSearchParams({ id: String(animeId) });
+        if (animeSession) watchQueryBase.set('session', animeSession);
+        if (animeTitle) watchQueryBase.set('title', animeTitle);
 
         UI.el("#title").textContent = detail.anime.title;
         UI.el("#rating").textContent = `⭐ ${detail.anime.rating}`;
         UI.el("#meta").innerHTML = [
           `<span>${esc(detail.anime.genre)}</span>`,
           `<span>${esc(detail.anime.year || '-')}</span>`,
-          `<span>${esc(detail.anime.eps)} episodes</span>`
+          `<span>${esc(Number(detail.anime.eps || 0) > 0 ? `${detail.anime.eps} episodes` : (detail.anime.status === 'ongoing' ? 'Ongoing' : 'Episodes TBA'))}</span>`
         ].join("");
         UI.el("#synopsis").textContent = detail.synopsis;
 
@@ -91,7 +104,7 @@
           cover.textContent = `${detail.anime.genre} • ${detail.anime.year || '-'}`;
         }
 
-        const EPISODES_PER_PAGE = 50;
+        const EPISODES_PER_PAGE = 25;
         let episodePage = 1;
 
         const renderEpisodeTab = () => {
@@ -103,7 +116,7 @@
 
           return `
             <div class="row" style="justify-content:space-between;margin-bottom:10px;">
-              <span class="muted">Episode ${start + 1}-${Math.min(start + EPISODES_PER_PAGE, totalEpisodes)} dari ${totalEpisodes}</span>
+              <span class="muted">Episodes ${start + 1}-${Math.min(start + EPISODES_PER_PAGE, totalEpisodes)} of ${totalEpisodes}</span>
               <div class="row">
                 <button class="btn" id="ep-prev-page" ${episodePage <= 1 ? 'disabled' : ''}>← Prev</button>
                 <span class="muted" style="align-self:center;">Page ${episodePage}/${totalPages}</span>
@@ -117,7 +130,7 @@
                   <p class="title">Episode ${episode.num} — ${episode.title}</p>
                   <p class="meta"><span>${episode.duration}</span></p>
                 </div>
-                <button class="btn" onclick="location.href='watch.html?id=${animeId}&ep=${episode.num}'">Play</button>
+                <button class="btn" onclick="const q=new URLSearchParams('${watchQueryBase.toString()}');q.set('ep','${episode.num}');location.href='watch.html?'+q.toString()">Play</button>
               </article>
             `).join('')}
           `;
@@ -128,11 +141,16 @@
 
           info: () => `
             <article class="card">
-              <div class="card-body">
+              <div class="card-body detail-info-grid">
                 <p class="meta"><span>Studio: ${esc((detail.info?.studios || []).join(', ') || '-')}</span></p>
                 <p class="meta"><span>Source: ${esc(detail.info?.source || '-')}</span></p>
                 <p class="meta"><span>Status: ${esc(detail.info?.status || '-')}</span></p>
                 <p class="meta"><span>Type/Season: ${esc(detail.info?.type || '-')} • ${esc(detail.info?.season || '-')}</span></p>
+                <p class="meta"><span>Japanese: ${esc(detail.extra?.japanese || '-')}</span></p>
+                <p class="meta"><span>Synonym: ${esc(detail.extra?.synonym || '-')}</span></p>
+                <p class="meta"><span>Aired: ${esc(detail.extra?.aired || '-')}</span></p>
+                <p class="meta"><span>Duration: ${esc(detail.extra?.duration || '-')}</span></p>
+                <div class="chips">${(detail.extra?.genres || []).map((g) => `<span class="chip">${esc(g)}</span>`).join('')}</div>
               </div>
             </article>
           `,
@@ -167,6 +185,10 @@
 
         renderTab();
 
+        const recs = detail.recommendations || [];
+        UI.el("#recommendations").innerHTML = recs.length ? recs.slice(0, 10).map(UI.card).join("") : '<p class="muted">No recommendations from AnimePahe yet.</p>';
+        UI.attachCardNavigation("#recommendations");
+
         document.querySelectorAll(".tab").forEach((tab) => {
           tab.onclick = () => {
             document.querySelectorAll(".tab").forEach((node) => node.classList.remove("active"));
@@ -175,7 +197,11 @@
           };
         });
 
-        UI.el("#watch-now").onclick = () => location.href = `watch.html?id=${animeId}&ep=1`;
+        UI.el("#watch-now").onclick = () => {
+          const q = new URLSearchParams(watchQueryBase.toString());
+          q.set('ep', '1');
+          location.href = `watch.html?${q.toString()}`;
+        };
         UI.el("#bookmark").onclick = async () => {
           const saved = await UI.toggleMyList(detail.anime);
           UI.openModal(saved ? "Saved" : "Removed", saved ? "Anime added to My List." : "Anime removed from My List.");
@@ -186,7 +212,12 @@
           else UI.openModal("Trailer", "Trailer belum tersedia untuk anime ini.");
         };
       } catch (error) {
-        UI.openModal("Error", error.message || "Gagal load detail anime.");
+        const message = error.message || "Gagal load detail anime.";
+        UI.el("#title").textContent = "Detail unavailable";
+        UI.el("#synopsis").textContent = "Backend or upstream provider failed to return this title. Try another anime from Explore.";
+        UI.el("#rating").textContent = "OFFLINE";
+        UI.el("#tab-content").innerHTML = `<article class="card"><div class="card-body"><p class="title">Unable to load episodes</p><p class="muted">${esc(message)}</p><a class="btn primary" href="explore.html">Back to Explore</a></div></article>`;
+        UI.openModal("Error", message);
       }
     });
   </script>

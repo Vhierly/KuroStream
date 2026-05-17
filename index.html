@@ -3,8 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>KuroStream — Screen Launcher</title>
+  <title>KuroStream — Watch Anime Online</title>
   <link rel="stylesheet" href="css/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/dexie@4/dist/dexie.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script defer src="js/api.js"></script>
+  <script defer src="js/components.js"></script>
+  <script defer src="js/auth.js"></script>
   <script defer src="js/app.js"></script>
 </head>
 <body>
@@ -12,69 +17,169 @@
     <header class="topbar">
       <div class="brand">Kuro<span>Stream</span></div>
       <nav class="nav">
-        <a href="home.html">Home</a>
+        <a href="index.html">Home</a>
         <a href="explore.html">Explore</a>
         <a href="detail.html">Details</a>
         <a href="watch.html">Watch</a>
         <a href="my-list.html">My List</a>
-              <a id="auth-badge" href="login.html">Login</a>
+        <a id="auth-badge" href="login.html">Login</a>
       </nav>
       <label class="search">
-        <span>🔎</span>
+        <span>⌕</span>
         <input id="global-search" placeholder="Search anime...">
       </label>
     </header>
 
-    <section class="page-header">
-      <div>
-        <h1 class="page-title">KuroStream Frontend</h1>
-        <p class="page-subtitle">Open each screen to review complete UI flows and responsive behavior.</p>
+    <div class="home-layout">
+      <div class="main-column">
+        <section class="hero" id="hero">
+          <div class="hero-overlay"></div>
+          <div class="hero-content">
+            <div class="row"><span class="badge">FEATURED</span><span class="badge">HD</span><span class="badge">SUB</span></div>
+            <h1 id="hero-title">Loading anime...</h1>
+            <p class="page-subtitle" id="hero-subtitle">Fetching latest featured title from backend.</p>
+            <div class="row" id="hero-meta"></div>
+            <div class="row">
+              <button class="btn primary" id="hero-watch">Watch Now</button>
+              <button class="btn" id="hero-save">Add to List</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <h2>Popular Today</h2>
+            <a class="view-link" href="explore.html">View All <span>→</span></a>
+          </div>
+          <div id="popular-grid" class="grid cards-5"></div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <h2>Latest Release</h2>
+            <a class="view-link" href="explore.html?sort=year">View All <span>→</span></a>
+          </div>
+          <div id="latest-list" class="latest-grid"></div>
+        </section>
+
+        <section class="az-panel">
+          <strong>A-Z LIST</strong>
+          <p class="muted">Search anime by first letter. Quick browse works with current Explore search.</p>
+          <div class="az-list" id="az-list"></div>
+        </section>
       </div>
-    </section>
 
-    <section class="section">
-      <div class="grid cards-5">
-        <a class="card" href="home.html">
-          <div class="poster">Home</div>
-          <div class="card-body">
-            <p class="title">Home Page</p>
-            <p class="meta"><span>Hero, trending, latest, continue watching</span></p>
+      <aside class="sidebar">
+        <section class="sidebar-panel">
+          <h3>Quick Filter</h3>
+          <div class="filter-grid">
+            <select id="side-genre" class="select"><option>All</option><option>Action</option><option>Adventure</option><option>Drama</option><option>Comedy</option><option>Sci-Fi</option></select>
+            <select id="side-sort" class="select"><option value="rating">Rating</option><option value="year">Release Year</option></select>
           </div>
-        </a>
+          <button class="btn primary" id="side-search">Search</button>
+        </section>
 
-        <a class="card" href="explore.html">
-          <div class="poster">Explore</div>
-          <div class="card-body">
-            <p class="title">Catalog / Explore</p>
-            <p class="meta"><span>Search, filter, sort, pagination</span></p>
-          </div>
-        </a>
+        <section class="sidebar-panel">
+          <h3>Ongoing Anime</h3>
+          <div id="ongoing-list" class="list"></div>
+        </section>
 
-        <a class="card" href="detail.html">
-          <div class="poster">Details</div>
-          <div class="card-body">
-            <p class="title">Anime Details</p>
-            <p class="meta"><span>Metadata, synopsis, episodes, actions</span></p>
-          </div>
-        </a>
-
-        <a class="card" href="watch.html">
-          <div class="poster">Watch</div>
-          <div class="card-body">
-            <p class="title">Watch Page</p>
-            <p class="meta"><span>Player layout, next/prev, auto-next</span></p>
-          </div>
-        </a>
-
-        <a class="card" href="my-list.html">
-          <div class="poster">My List</div>
-          <div class="card-body">
-            <p class="title">Bookmark List</p>
-            <p class="meta"><span>Saved items with watching states</span></p>
-          </div>
-        </a>
-      </div>
-    </section>
+        <section class="sidebar-panel">
+          <h3>Top Ranked</h3>
+          <div class="tabbar" id="rank-tabs"><button class="tab active" data-rank="weekly">Weekly</button><button class="tab" data-rank="monthly">Monthly</button><button class="tab" data-rank="all">All</button></div>
+          <div id="ranked-list"></div>
+        </section>
+      </aside>
+    </div>
   </main>
+
+  <div id="modal" class="modal-backdrop"></div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', async () => {
+      const esc = UI.escapeHtml;
+      const safe = (url) => String(url || '').replace(/'/g, '%27');
+      const az = ['#','0-9',...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'];
+      UI.el('#az-list').innerHTML = az.map(x => `<a href="explore.html?q=${encodeURIComponent(x)}">${x}</a>`).join('');
+      UI.el('#side-search').onclick = () => {
+        const genre = UI.el('#side-genre').value;
+        const sort = UI.el('#side-sort').value;
+        location.href = `explore.html?genre=${encodeURIComponent(genre)}&sort=${encodeURIComponent(sort)}`;
+      };
+
+      try {
+        const data = await ApiClient.getHome();
+        const featured = data.featured?.image ? data.featured : (data.trending?.find(a => a.image) || data.trending?.[0]);
+        if (featured) {
+          UI.el('#hero-title').textContent = featured.title || 'Featured Anime';
+          UI.el('#hero-subtitle').textContent = featured.subtitle || featured.synopsis || 'Stream latest episodes with a fast KuroStream layout.';
+          UI.el('#hero-meta').innerHTML = [
+            ...((featured.genres || [featured.genre]).filter(Boolean).slice(0,3)).map(g => `<span class="badge">${esc(g)}</span>`),
+            `<span class="badge">⭐ ${esc(featured.rating || '-')}</span>`,
+            `<span class="badge">${esc(featured.year || '-')}</span>`
+          ].join('');
+          if (featured.image) {
+            UI.el('#hero').style.backgroundImage = `linear-gradient(180deg, transparent 35%, rgba(0,0,0,.86)), url('${safe(featured.image)}')`;
+            UI.el('#hero').classList.add('hero-has-image');
+          }
+          UI.el('#hero-watch').onclick = () => location.href = `watch.html?id=${featured.id}&ep=1`;
+          UI.el('#hero-save').onclick = async () => {
+            const saved = await UI.toggleMyList(featured);
+            UI.openModal(saved ? 'Added' : 'Removed', saved ? 'Added to My List.' : 'Removed from My List.');
+          };
+        }
+
+        const trending = (data.trending || []).slice(0, 10);
+        UI.el('#popular-grid').innerHTML = trending.map(UI.card).join('');
+        UI.attachCardNavigation('#popular-grid');
+
+        const latest = (data.latest || []).slice(0, 15);
+        UI.el('#latest-list').innerHTML = latest.map(row => `
+          <article class="latest-card card-link" data-id="${row.id}">
+            <div class="latest-thumb ${row.image ? 'poster-image' : ''}" ${row.image ? `style="background-image:url('${safe(row.image)}')"` : ''}></div>
+            <div class="latest-body">
+              <p class="title">${esc(row.anime)}</p>
+              <p class="meta"><span class="badge">${esc(row.ep || (row.epNum ? `EP ${row.epNum}` : 'EP TBA'))}</span><span>${esc(row.time || '')}</span></p>
+            </div>
+            <span class="latest-play">▶</span>
+          </article>
+        `).join('');
+        UI.attachCardNavigation('#latest-list');
+
+        const ongoing = (data.latest || [])
+          .filter((row) => row.id && (row.epNum || row.ep))
+          .slice(0, 8);
+        UI.el('#ongoing-list').innerHTML = ongoing.map((row) => `
+          <a class="mini-row" href="watch.html?id=${row.id}&ep=${encodeURIComponent(row.epNum || 1)}"><strong>${esc(row.anime || row.title)}</strong><span class="badge">${esc(row.ep || (row.epNum ? `EP ${row.epNum}` : 'EP TBA'))}</span></a>
+        `).join('') || trending.slice(0, 8).map((a) => `
+          <a class="mini-row" href="watch.html?id=${a.id}&ep=1"><strong>${esc(a.title)}</strong><span class="badge">${esc(a.eps ? `EP ${a.eps}` : 'EP TBA')}</span></a>
+        `).join('');
+        const rankSets = {
+          weekly: [...trending].sort((a, b) => (b.rating || 0) - (a.rating || 0)).slice(0, 6),
+          monthly: [...trending].sort((a, b) => (b.year || 0) - (a.year || 0) || (b.rating || 0) - (a.rating || 0)).slice(0, 6),
+          all: [...trending].sort((a, b) => (b.eps || 0) - (a.eps || 0)).slice(0, 6)
+        };
+        const renderRanked = (rank = 'weekly') => {
+          UI.el('#ranked-list').innerHTML = (rankSets[rank] || rankSets.weekly).map((a, i) => `
+            <a class="rank-row" href="detail.html?id=${a.id}">
+              <span class="rank-num">${i + 1}</span>
+              <span class="rank-thumb" ${a.image ? `style="background-image:url('${safe(a.image)}')"` : ''}></span>
+              <span><strong class="title">${esc(a.title)}</strong><p class="meta"><span>⭐ ${esc(a.rating || '-')}</span><span>${esc(a.genre || '')}</span></p></span>
+            </a>
+          `).join('');
+        };
+        renderRanked('weekly');
+        document.querySelectorAll('#rank-tabs .tab').forEach((tab) => {
+          tab.addEventListener('click', () => {
+            document.querySelectorAll('#rank-tabs .tab').forEach((btn) => btn.classList.remove('active'));
+            tab.classList.add('active');
+            renderRanked(tab.dataset.rank || 'weekly');
+          });
+        });
+      } catch (error) {
+        UI.openModal('Error', error.message || 'Failed to load homepage.');
+      }
+    });
+  </script>
 </body>
 </html>

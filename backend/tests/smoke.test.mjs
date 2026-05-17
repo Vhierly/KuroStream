@@ -58,8 +58,7 @@ test('GET /api/health returns health shape with cache metadata', async () => {
   const body = await res.json();
   assert.equal(typeof body.live, 'boolean');
   assert.equal(typeof body.ready, 'boolean');
-  assert.equal(typeof body.providers?.jikan, 'boolean');
-  assert.equal(typeof body.providers?.animepaheProxy, 'boolean');
+  assert.equal(typeof body.providers?.paheanime, 'boolean');
   assert.equal(typeof body.cache?.size, 'number');
   assert.equal(typeof body.cache?.maxSize, 'number');
   assert.equal(typeof body.cache?.ttlMs, 'number');
@@ -70,8 +69,7 @@ test('GET /api/ready returns readiness payload', async () => {
   assert.ok([200, 503].includes(res.status));
   const body = await res.json();
   assert.equal(typeof body.ready, 'boolean');
-  assert.equal(typeof body.providers?.jikan, 'boolean');
-  assert.equal(typeof body.providers?.animepaheProxy, 'boolean');
+  assert.equal(typeof body.providers?.paheanime, 'boolean');
 });
 
 test('Invalid ID endpoints return 400', async () => {

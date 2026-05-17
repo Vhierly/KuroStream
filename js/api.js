@@ -24,15 +24,26 @@ window.ApiClient = (() => {
     if (params.q) query.set('q', params.q);
     if (params.genre) query.set('genre', params.genre);
     if (params.sort) query.set('sort', params.sort);
+    if (params.mode) query.set('mode', params.mode);
+    if (params.tab) query.set('tab', params.tab);
+    if (params.page) query.set('page', params.page);
+    if (params.perPage) query.set('perPage', params.perPage);
     return request(`/catalog?${query.toString()}`);
   }
 
-  async function getAnimeDetail(id = 1) {
-    return request(`/anime/${id}/detail`);
+  async function getAnimeDetail(id = 1, params = {}) {
+    const query = new URLSearchParams();
+    if (params.session) query.set('session', params.session);
+    if (params.title) query.set('title', params.title);
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    return request(`/anime/${id}/detail${suffix}`);
   }
 
-  async function getWatchContext(id = 1, ep = 1) {
-    return request(`/watch/${id}?ep=${ep}`);
+  async function getWatchContext(id = 1, ep = 1, params = {}) {
+    const query = new URLSearchParams({ ep });
+    if (params.session) query.set('session', params.session);
+    if (params.title) query.set('title', params.title);
+    return request(`/watch/${id}?${query.toString()}`);
   }
 
   return { getHome, getCatalog, getAnimeDetail, getWatchContext };

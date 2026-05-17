@@ -10,12 +10,9 @@ import crypto from 'crypto';
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
-const JIKAN_BASE = process.env.JIKAN_BASE || 'https://api.jikan.moe/v4';
 const ANIMEPAHE_BASE = process.env.ANIMEPAHE_BASE || 'https://animepahe.ru/api';
 const ANIMEPAHE_PROXY_BASE = process.env.ANIMEPAHE_PROXY_BASE || 'http://127.0.0.1:3030/api';
 const OTAKUDESU_API_BASE = process.env.OTAKUDESU_API_BASE || 'https://anoboy.be';
-const JIKAN_CACHE_TTL_MS = Number(process.env.JIKAN_CACHE_TTL_MS || 120000);
-const JIKAN_CACHE_MAX_SIZE = Math.max(20, Number(process.env.JIKAN_CACHE_MAX_SIZE || 300));
 
 const insecureAgent = new https.Agent({ rejectUnauthorized: false });
 
@@ -77,41 +74,7 @@ app.use('/api', apiLimiter);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const frontendRoot = path.resolve(__dirname, '..');
-const jikanCache = new Map();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function setJikanCache(key, data) {
-  if (jikanCache.has(key)) {
-    jikanCache.delete(key);
-  }
-
-  jikanCache.set(key, { time: Date.now(), data });
-
-  while (jikanCache.size > JIKAN_CACHE_MAX_SIZE) {
-    const oldestKey = jikanCache.keys().next().value;
-    if (!oldestKey) break;
-    jikanCache.delete(oldestKey);
-  }
-}
-
-function getJikanCache(key, ttlMs = JIKAN_CACHE_TTL_MS) {
-  const cached = jikanCache.get(key);
-  if (!cached) return null;
-  if (Date.now() - cached.time >= ttlMs) {
-    jikanCache.delete(key);
-    return null;
-  }
-  return cached.data;
-}
-
-function cleanupExpiredJikanCache() {
-  const now = Date.now();
-  for (const [key, value] of jikanCache.entries()) {
-    if (now - value.time >= JIKAN_CACHE_TTL_MS) {
-      jikanCache.delete(key);
-    }
-  }
-}
 
 function sendError(res, req, status, code, message, detail = null) {
   return res.status(status).json({
@@ -172,86 +135,22 @@ function fallbackSearchEmbed(titleRaw) {
   return `https://www.youtube.com/embed?listType=search&list=${q}`;
 }
 
-async function jikanGet(url, params = {}, ttlMs = 120000) {
-  const cacheKey = `${url}?${new URLSearchParams(params).toString()}`;
-  const cached = getJikanCache(cacheKey, ttlMs);
-  if (cached) return cached;
-
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const res = await axios.get(`${JIKAN_BASE}${url}`, {
-        params,
-        timeout: 15000,
-        headers: { Accept: 'application/json' }
-      });
-
-      setJikanCache(cacheKey, res.data);
-      return res.data;
-    } catch (error) {
-      lastError = error;
-      const code = error?.response?.status;
-      if (code === 429 && attempt < 3) {
-        await sleep(700 * attempt);
-        continue;
-      }
-      break;
-    }
-  }
-
-  throw lastError;
-}
-
-async function getAllAnimeEpisodes(animeId) {
-  const all = [];
-  let page = 1;
-  const maxPages = 30;
-
-  while (page <= maxPages) {
-    const response = await jikanGet(`/anime/${animeId}/episodes`, { page });
-    const rows = Array.isArray(response?.data) ? response.data : [];
-    all.push(...rows);
-
-    const hasNext = Boolean(response?.pagination?.has_next_page);
-    if (!hasNext || rows.length === 0) break;
-    page += 1;
-  }
-
-  return all.map((ep, idx) => ({
-    num: Number(ep?.mal_id) > 0 ? Number(ep.mal_id) : idx + 1,
-    title: ep?.title || `Episode ${idx + 1}`,
-    duration: '24 min'
-  }));
-}
-
 async function checkUpstreamReadiness() {
-  let jikanOk = false;
-  let jikanError = null;
   let proxyOk = false;
   let proxyError = null;
 
   try {
-    const top = await jikanGet('/top/anime', { limit: 1 }, 30_000);
-    jikanOk = Array.isArray(top?.data);
-  } catch (error) {
-    jikanError = error?.message || String(error);
-  }
-
-  try {
     const check = await paheProxyGet('/airing', { page: 1 });
-    proxyOk = Array.isArray(check?.data);
+    proxyOk = normalizeListPayload(check).length > 0;
   } catch (error) {
     proxyError = error?.message || String(error);
   }
 
   return {
-    ready: jikanOk && proxyOk,
+    ready: proxyOk,
     providers: {
-      jikan: jikanOk,
-      jikanError,
-      animepaheProxy: proxyOk,
-      animepaheProxyError: proxyError
+      paheanime: proxyOk,
+      paheanimeError: proxyError
     }
   };
 }
@@ -675,247 +574,352 @@ app.get('/api/health', async (_req, res) => {
       animepaheDirectError: paheDirect.ok ? null : paheDirect.error
     },
     cache: {
-      size: jikanCache.size,
-      maxSize: JIKAN_CACHE_MAX_SIZE,
-      ttlMs: JIKAN_CACHE_TTL_MS
+      provider: 'paheanime',
+      size: 0,
+      maxSize: 0,
+      ttlMs: 0
     }
   };
 
   return res.status(readiness.ready ? 200 : 503).json(body);
 });
 
-app.get('/api/home', async (req, res) => {
-  try {
-    const [top, seasonNow] = await Promise.all([
-      jikanGet('/top/anime', { limit: 12 }),
-      jikanGet('/seasons/now', { limit: 12 })
-    ]);
+const fallbackAnime = [
+  { id: 21, session: 'one-piece', title: 'One Piece', genre: 'Adventure', rating: 8.72, year: 1999, eps: 1130, status: 'ongoing', image: 'https://cdn.myanimelist.net/images/anime/1244/138851l.jpg' },
+  { id: 52991, session: 'sousou-no-frieren', title: 'Sousou no Frieren', genre: 'Adventure', rating: 9.29, year: 2023, eps: 28, status: 'completed', image: 'https://cdn.myanimelist.net/images/anime/1015/138006l.jpg' },
+  { id: 5114, session: 'fullmetal-alchemist-brotherhood', title: 'Fullmetal Alchemist: Brotherhood', genre: 'Action', rating: 9.10, year: 2009, eps: 64, status: 'completed', image: 'https://cdn.myanimelist.net/images/anime/1208/94745l.jpg' },
+  { id: 9253, session: 'steins-gate', title: 'Steins;Gate', genre: 'Drama', rating: 9.07, year: 2011, eps: 24, status: 'completed', image: 'https://cdn.myanimelist.net/images/anime/1935/127974l.jpg' },
+  { id: 11061, session: 'hunter-x-hunter-2011', title: 'Hunter x Hunter (2011)', genre: 'Action', rating: 9.03, year: 2011, eps: 148, status: 'completed', image: 'https://cdn.myanimelist.net/images/anime/1337/99013l.jpg' },
+  { id: 16498, session: 'shingeki-no-kyojin', title: 'Shingeki no Kyojin', genre: 'Action', rating: 8.55, year: 2013, eps: 25, status: 'completed', image: 'https://cdn.myanimelist.net/images/anime/10/47347l.jpg' },
+  { id: 30276, session: 'one-punch-man', title: 'One Punch Man', genre: 'Action', rating: 8.48, year: 2015, eps: 12, status: 'completed', image: 'https://cdn.myanimelist.net/images/anime/12/76049l.jpg' },
+  { id: 31964, session: 'boku-no-hero-academia', title: 'Boku no Hero Academia', genre: 'Action', rating: 7.85, year: 2016, eps: 13, status: 'ongoing', image: 'https://cdn.myanimelist.net/images/anime/10/78745l.jpg' },
+  { id: 40748, session: 'jujutsu-kaisen', title: 'Jujutsu Kaisen', genre: 'Action', rating: 8.60, year: 2020, eps: 47, status: 'completed', image: 'https://cdn.myanimelist.net/images/anime/1171/109222l.jpg' },
+  { id: 38000, session: 'kimetsu-no-yaiba', title: 'Kimetsu no Yaiba', genre: 'Action', rating: 8.45, year: 2019, eps: 63, status: 'ongoing', image: 'https://cdn.myanimelist.net/images/anime/1286/99889l.jpg' },
+  { id: 33352, session: 'violet-evergarden', title: 'Violet Evergarden', genre: 'Drama', rating: 8.67, year: 2018, eps: 13, status: 'completed', image: 'https://cdn.myanimelist.net/images/anime/1795/95088l.jpg' },
+  { id: 20583, session: 'haikyuu', title: 'Haikyuu!!', genre: 'Sports', rating: 8.44, year: 2014, eps: 85, status: 'completed', image: 'https://cdn.myanimelist.net/images/anime/7/76014l.jpg' }
+];
 
-    const featuredSource = (seasonNow.data?.[0] || top.data?.[0]);
-    const featured = {
-      id: featuredSource?.mal_id || null,
-      title: featuredSource?.title || 'Featured Anime',
-      subtitle: featuredSource?.synopsis?.slice(0, 160) || 'No synopsis available.',
-      genres: (featuredSource?.genres || []).slice(0, 3).map((g) => g.name),
-      rating: Number(featuredSource?.score || 0),
-      year: featuredSource?.year || new Date(featuredSource?.aired?.from || Date.now()).getFullYear(),
-      image: featuredSource?.images?.jpg?.large_image_url || featuredSource?.images?.jpg?.image_url || null
-    };
+function hashId(value = '') {
+  const hex = crypto.createHash('sha1').update(String(value)).digest('hex').slice(0, 8);
+  return parseInt(hex, 16);
+}
 
-    const trending = (top.data || []).slice(0, 10).map(mapAnime);
+function firstImage(item = {}) {
+  return item.poster || item.image || item.cover || item.snapshot || item.thumbnail || item.images?.jpg?.large_image_url || item.images?.jpg?.image_url || null;
+}
 
-    const latestEpisodes = (seasonNow.data || []).slice(0, 8).map((a, i) => ({
-      id: a.mal_id,
-      anime: a.title,
-      image: a.images?.jpg?.large_image_url || a.images?.jpg?.image_url || null,
-      epNum: Number(a.episodes || 1),
-      ep: a.episodes ? `EP ${a.episodes}` : `EP ?`,
-      time: `${i + 1}h ago`
-    }));
+function mapPaheAnime(item = {}, idx = 0) {
+  const title = item.title || item.name || item.anime_title || `Anime ${idx + 1}`;
+  const episodeCount = Number(item.episodes || item.episode || item.latestEpisode || item.latest_episode || item.totalEpisodes || 0);
+  const session = item.session || item.id || item.slug || item.animeSession || normalizeTitle(title).replace(/\s+/g, '-');
+  return {
+    id: Number(item.anime_id || item.mal_id || item.anilist_id || item.numericId || item.id || 0) || hashId(session || title),
+    session,
+    title,
+    genre: item.genre || item.type || 'Anime',
+    rating: Number(item.score || item.rating || 0),
+    year: Number(item.year || item.releaseYear || 0) || null,
+    eps: episodeCount,
+    status: mapStatus(item.status || (episodeCount ? 'ongoing' : 'ongoing')),
+    image: firstImage(item)
+  };
+}
 
-    res.json({ featured, trending, latest: latestEpisodes });
-  } catch (error) {
-    console.error('GET /api/home failed:', error);
-    sendError(res, req, 500, 'HOME_FETCH_FAILED', 'Failed to load home data', error?.message || String(error));
+function mapPaheDetail(payload = {}, fallback = {}) {
+  const title = payload.title || fallback.title || 'Anime';
+  const ids = payload.ids || {};
+  return {
+    id: Number(ids.animepahe_id || ids.mal || fallback.id || 0) || hashId(payload.session || title),
+    session: payload.session || fallback.session || null,
+    title,
+    genre: Array.isArray(payload.genre) ? payload.genre.join(', ') : (payload.genre || payload.type || fallback.genre || 'Anime'),
+    rating: Number(payload.score || fallback.rating || 0),
+    year: Number(payload.year || String(payload.season || payload.aired || '').match(/\b(19|20)\d{2}\b/)?.[0] || fallback.year || 0) || null,
+    eps: Number(payload.episodes || fallback.eps || 0),
+    status: mapStatus(payload.status || fallback.status || 'ongoing'),
+    image: firstImage(payload) || fallback.image || null,
+    synopsis: payload.synopsis || null,
+    info: payload
+  };
+}
+
+function mapPaheRelatedRows(rows = []) {
+  return normalizeListPayload(rows).map((row, idx) => mapPaheAnime({
+    ...row,
+    id: row.id || row.anime_id || row.ids?.animepahe_id || hashId(row.session || row.title || idx),
+    image: firstImage(row) || row.poster
+  }, idx)).filter((row) => row.title);
+}
+
+async function resolvePaheAnime(id, query = {}) {
+  const title = String(query.title || '').trim();
+  const session = String(query.session || '').trim();
+  const base = fallbackAnime.find((a) => a.id === id) || null;
+  if (title) {
+    const found = await findPaheAnimeByTitle(title).catch(() => null);
+    if (found?.session) {
+      const detail = await paheProxyGet(`/${found.session}`).catch(() => null);
+      if (detail?.title) return mapPaheDetail({ ...detail, session: found.session }, found);
+      return found;
+    }
   }
+  if (session) {
+    const detail = await paheProxyGet(`/${session}`).catch(() => null);
+    if (detail?.title) return mapPaheDetail({ ...detail, session }, base || {});
+  }
+  if (base) {
+    const found = await findPaheAnimeByTitle(base.title).catch(() => null);
+    return found || base;
+  }
+  return null;
+}
+
+const posterCache = new Map();
+async function findAnimePosterByTitle(title) {
+  const key = normalizeTitle(title);
+  if (!key) return null;
+  if (posterCache.has(key)) return posterCache.get(key);
+  const found = await findPaheAnimeByTitle(title).catch(() => null);
+  const poster = found?.image || null;
+  posterCache.set(key, poster);
+  if (posterCache.size > 300) posterCache.delete(posterCache.keys().next().value);
+  return poster;
+}
+
+async function enrichPosters(rows = []) {
+  const limited = rows.slice(0, 12);
+  await Promise.all(limited.map(async (row) => {
+    const poster = await findAnimePosterByTitle(row.title);
+    if (poster) row.image = poster;
+  }));
+  return rows;
+}
+
+function normalizeListPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  for (const key of ['data', 'results', 'anime', 'items', 'list']) {
+    if (Array.isArray(payload?.[key])) return payload[key];
+  }
+  return [];
+}
+
+async function getPaheList(kind = 'airing', params = {}) {
+  const paths = kind === 'search'
+    ? ['/search']
+    : kind === 'releases'
+      ? ['/releases', '/release', '/airing']
+      : ['/airing', '/release', '/releases'];
+
+  for (const pathname of paths) {
+    try {
+      const data = await paheProxyGet(pathname, { page: 1, ...params });
+      const rows = normalizeListPayload(data).map(mapPaheAnime).filter((x) => x.title);
+      if (rows.length) return rows;
+    } catch (_error) {}
+  }
+  return [];
+}
+
+async function findPaheAnimeByTitle(title) {
+  const rows = await getPaheList('search', { q: title });
+  if (!rows.length) return null;
+  const ranked = rows
+    .map((row) => ({ ...row, _score: scoreTitleMatch(title, row.title) }))
+    .sort((a, b) => b._score - a._score);
+  return ranked[0];
+}
+
+function buildPaheEpisodes(anime, releaseRows = []) {
+  const rows = normalizeListPayload(releaseRows);
+  if (rows.length) {
+    return rows.map((row, idx) => ({
+      num: Number(row.episode || row.ep || row.number || idx + 1),
+      title: row.title || row.name || `Episode ${Number(row.episode || idx + 1)}`,
+      duration: row.duration || '24 min',
+      session: row.session || row.id || null
+    })).sort((a, b) => a.num - b.num);
+  }
+  const total = Math.max(1, Math.min(Number(anime?.eps || 12), 1200));
+  return Array.from({ length: total }, (_row, idx) => ({ num: idx + 1, title: `Episode ${idx + 1}`, duration: '24 min' }));
+}
+
+function buildHomePayload(paheRows = []) {
+  const rows = paheRows.length ? paheRows : fallbackAnime;
+  const ongoing = rows.filter((a) => a.status === 'ongoing' || Number(a.eps || 0) > 0);
+  const featured = {
+    ...(ongoing[0] || rows[0]),
+    subtitle: 'Powered by Paheanime / AnimePahe data. Watch latest anime releases and ongoing episodes.'
+  };
+  const latest = (ongoing.length ? ongoing : rows).slice(0, 8).map((a, i) => ({
+    id: a.id,
+    anime: a.title,
+    image: a.image,
+    epNum: Number(a.eps || 0) || null,
+    ep: Number(a.eps || 0) ? `EP ${a.eps}` : 'EP TBA',
+    status: a.status,
+    time: `${i + 1}h ago`
+  }));
+  return { featured, trending: rows.slice(0, 10), latest };
+}
+
+app.get('/api/home', async (_req, res) => {
+  const rows = await enrichPosters(await getPaheList('airing'));
+  res.json(buildHomePayload(rows));
 });
 
 app.get('/api/catalog', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const genre = String(req.query.genre || 'All').trim();
+  const sort = String(req.query.sort || 'rating').trim();
+  const mode = String(req.query.mode || (q ? 'search' : 'airing')).trim();
+  const tab = String(req.query.tab || 'all').trim();
+  const page = Math.max(1, Math.floor(Number(req.query.page || 1) || 1));
+  const perPage = Math.min(30, Math.max(5, Math.floor(Number(req.query.perPage || 10) || 10)));
+
+  let payload = null;
+  let rows = [];
   try {
-    const q = String(req.query.q || '').trim();
-    const genre = String(req.query.genre || 'All').trim();
-    const sort = String(req.query.sort || 'rating').trim();
-
-    const source = q
-      ? await jikanGet('/anime', { q, limit: 25, sfw: true })
-      : await jikanGet('/top/anime', { limit: 25 });
-
-    let rows = (source.data || []).map(mapAnime);
-
-    if (genre && genre !== 'All') {
-      rows = rows.filter((a) => a.genre.toLowerCase() === genre.toLowerCase());
+    const params = { page, perPage };
+    let pathname = '/airing';
+    if (mode === 'search' || q) {
+      pathname = '/search';
+      params.q = q || 'anime';
+    } else if (mode === 'queue') {
+      pathname = '/queue';
+    } else if (mode === 'az') {
+      pathname = '/anime';
+      if (tab && tab !== 'all') params.tab = tab;
     }
+    payload = await paheProxyGet(pathname, params);
+    rows = normalizeListPayload(payload).map(mapPaheAnime).filter((x) => x.title);
+  } catch (_error) {}
 
-    if (sort === 'year') rows.sort((a, b) => (b.year || 0) - (a.year || 0));
-    else rows.sort((a, b) => (b.rating || 0) - (a.rating || 0));
-
-    res.json(rows);
-  } catch (error) {
-    sendError(res, req, 500, 'CATALOG_FETCH_FAILED', 'Failed to load catalog', error.message);
+  if (!rows.length) {
+    rows = fallbackAnime;
   }
+
+  if (q && mode !== 'search') rows = rows.filter((a) => normalizeTitle(a.title).includes(normalizeTitle(q)) || scoreTitleMatch(q, a.title) > 0.25);
+  if (genre && genre !== 'All') rows = rows.filter((a) => a.genre.toLowerCase() === genre.toLowerCase());
+  if (sort === 'year') rows.sort((a, b) => (b.year || 0) - (a.year || 0));
+  else if (sort === 'title') rows.sort((a, b) => a.title.localeCompare(b.title));
+  else if (sort === 'episodes') rows.sort((a, b) => (b.eps || 0) - (a.eps || 0));
+  else rows.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+
+  const pageInfo = payload?.paginationInfo || payload?.pagination || payload || {};
+  const apiCurrentPage = Number(pageInfo.current_page || pageInfo.currentPage || pageInfo.page || page) || page;
+  const apiTotalPages = Number(pageInfo.last_page || pageInfo.lastPage || pageInfo.total_pages || pageInfo.totalPages || 0);
+  const apiTotalItems = Number(pageInfo.total || pageInfo.totalItems || 0);
+  const localTotalPages = Math.max(1, Math.ceil(rows.length / perPage));
+  const totalPages = apiTotalPages || localTotalPages;
+  const totalItems = apiTotalItems || (apiTotalPages ? apiTotalPages * perPage : rows.length);
+  const items = await enrichPosters(apiTotalPages ? rows : rows.slice((page - 1) * perPage, page * perPage));
+
+  res.json({
+    items,
+    pagination: {
+      page: apiCurrentPage,
+      perPage,
+      totalItems,
+      totalPages,
+      hasNextPage: apiCurrentPage < totalPages,
+      hasPrevPage: apiCurrentPage > 1
+    }
+  });
 });
 
 app.get('/api/anime/:id/detail', async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    if (!Number.isFinite(id) || id <= 0) {
-      return sendError(res, req, 400, 'INVALID_ANIME_ID', 'Invalid anime id');
-    }
-
-    const [detail, episodeList, charactersRes] = await Promise.all([
-      jikanGet(`/anime/${id}/full`),
-      getAllAnimeEpisodes(id),
-      jikanGet(`/anime/${id}/characters`).catch(() => ({ data: [] }))
-    ]);
-
-    const anime = mapAnime(detail.data);
-    const synopsis = detail.data?.synopsis || 'No synopsis available.';
-
-    const cast = ((charactersRes?.data) || []).slice(0, 10).map((row) => ({
-      character: row.character?.name || '-',
-      role: row.role || '-',
-      voiceActor: (row.voice_actors || [])[0]?.person?.name || '-',
-      language: (row.voice_actors || [])[0]?.language || '-'
-    }));
-
-    res.json({
-      anime,
-      synopsis,
-      episodes: episodeList,
-      info: {
-        studios: (detail.data?.studios || []).map((s) => s.name),
-        source: detail.data?.source || '-',
-        status: detail.data?.status || '-',
-        type: detail.data?.type || '-',
-        season: `${detail.data?.season || ''} ${detail.data?.year || ''}`.trim() || '-',
-        trailerUrl: detail.data?.trailer?.url || null
-      },
-      cast
-    });
-  } catch (error) {
-    sendError(res, req, 500, 'ANIME_DETAIL_FETCH_FAILED', 'Failed to load anime detail', error.message);
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id) || id <= 0) return sendError(res, req, 400, 'INVALID_ANIME_ID', 'Invalid anime id');
+  const anime = await resolvePaheAnime(id, req.query);
+  if (!anime) return sendError(res, req, 404, 'ANIME_NOT_FOUND', 'Anime not found');
+  let releases = [];
+  if (anime.session) {
+    releases = await paheProxyGet(`/${anime.session}/releases`, { sort: 'episode_asc', page: 1 }).catch(() => []);
   }
+  const episodes = buildPaheEpisodes(anime, releases);
+  res.json({
+    anime,
+    synopsis: anime.synopsis || `${anime.title} details loaded from Paheanime / AnimePahe.`,
+    episodes,
+    info: {
+      studios: Array.isArray(anime.info?.studio) ? anime.info.studio : (anime.info?.studio ? [anime.info.studio] : ['Paheanime / AnimePahe']),
+      source: 'Paheanime API',
+      status: anime.status,
+      type: anime.info?.type || anime.genre || 'Anime',
+      season: anime.info?.season || (anime.year ? String(anime.year) : '-'),
+      trailerUrl: anime.info?.preview || null
+    },
+    extra: {
+      japanese: anime.info?.japanese || null,
+      synonym: anime.info?.synonym || null,
+      aired: anime.info?.aired || null,
+      duration: anime.info?.duration || null,
+      genres: anime.info?.genre || [],
+      themes: anime.info?.themes || [],
+      demographic: anime.info?.demographic || [],
+      externalLinks: anime.info?.external_links || [],
+      relations: anime.info?.relations || []
+    },
+    recommendations: mapPaheRelatedRows(anime.info?.recommendations || []),
+    cast: []
+  });
 });
 
 app.get('/api/watch/:id', async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const ep = Number(req.query.ep || 1);
-    if (!Number.isFinite(id) || id <= 0) {
-      return sendError(res, req, 400, 'INVALID_ANIME_ID', 'Invalid anime id');
-    }
-    const safeEp = Number.isFinite(ep) && ep > 0 ? Math.floor(ep) : 1;
-
-    const [detail, episodeList, top] = await Promise.all([
-      jikanGet(`/anime/${id}/full`),
-      getAllAnimeEpisodes(id),
-      jikanGet('/top/anime', { limit: 10 })
-    ]);
-
-    const anime = mapAnime(detail.data);
-
-    let pahe = {
-      available: false,
-      note: 'No AnimePahe match',
-      search: null,
-      selectedAnime: null,
-      releases: null,
-      selectedEpisode: null,
-      play: null
-    };
-
-    try {
-      const search = await paheProxyGet('/search', { q: anime.title });
-      const matches = Array.isArray(search?.data) ? search.data : [];
-      const selectedAnime = matches.find((m) => Number(m.episodes || 0) > 0) || matches[0];
-
-      if (selectedAnime?.session) {
-        const releases = await paheProxyGet(`/${selectedAnime.session}/releases`, {
-          sort: 'episode_asc',
-          page: 1
-        });
-
-        const releaseRows = Array.isArray(releases?.data) ? releases.data : [];
-        const selectedEpisode = releaseRows.find((r) => Number(r.episode) === safeEp) || releaseRows[0];
-
-        let play = null;
-        if (selectedEpisode?.session) {
-          play = await paheProxyGet(`/play/${selectedAnime.session}`, {
-            episodeId: selectedEpisode.session,
-            downloads: false
-          });
-        }
-
-        pahe = {
-          available: Boolean(play?.sources?.length),
-          note: play?.sources?.length ? 'AnimePahe stream sources ready' : 'AnimePahe found, but no stream source on selected episode',
-          search,
-          selectedAnime,
-          releases,
-          selectedEpisode,
-          play
-        };
-      }
-    } catch (error) {
-      pahe = {
-        ...pahe,
-        note: `AnimePahe proxy error: ${error.message}`
-      };
-    }
-
-    const trailerEmbed = normalizeEmbedUrl(detail.data?.trailer?.embed_url || detail.data?.trailer?.url)
-      || fallbackSearchEmbed(anime.title);
-    const paheSources = Array.isArray(pahe.play?.sources) ? pahe.play.sources : [];
-    const paheSubEngSources = paheSources
-      .filter((source) => source?.isDub !== true)
-      .map((source) => ({ ...source, fanSub: source?.fanSub || 'eng', sourceLang: 'en' }));
-
-    if (paheSources.length > 0 && paheSubEngSources.length === 0) {
-      pahe.note = 'Only English dub sources found; Japanese audio source unavailable for this episode';
-    }
-
-    const subIndoSourceId = 'disabled';
-    const indo = { available: false, note: 'Sub INDO dinonaktifkan.', sources: [] };
-
-    const streamSources = [...paheSubEngSources, ...(indo.sources || [])];
-
-    if (!streamSources.length && trailerEmbed) {
-      streamSources.push({
-        url: null,
-        isM3U8: false,
-        filename: 'Trailer',
-        embed: trailerEmbed,
-        resolution: 'Trailer',
-        isDub: false,
-        fanSub: 'official'
-      });
-    }
-
-    const providerNotes = [
-      `Sub ENG: ${pahe.note}`,
-      `Sub INDO: ${indo.note}`
-    ].filter(Boolean).join(' | ');
-
-    res.json({
-      anime,
-      currentEpisode: safeEp,
-      episodes: episodeList,
-      related: (top.data || []).slice(0, 6).map(mapAnime),
-      streamProvider: {
-        source: `animepahe+${subIndoSourceId}`,
-        available: Boolean(streamSources.length),
-        note: streamSources.length ? providerNotes : (trailerEmbed ? `Fallback trailer. ${providerNotes}` : providerNotes),
-        selectedAnimeSession: pahe.selectedAnime?.session || null,
-        selectedEpisodeSession: pahe.selectedEpisode?.session || null,
-        sources: streamSources,
-        downloads: pahe.play?.downloads || [],
-        providers: {
-          subEng: { source: 'animepahe-api', available: paheSubEngSources.length > 0, count: paheSubEngSources.length, note: pahe.note, sources: paheSubEngSources },
-          subIndo: { source: subIndoSourceId, available: indo.available, count: (indo.sources || []).length, note: indo.note, sources: (indo.sources || []) }
-        }
-      }
-    });
-  } catch (error) {
-    sendError(res, req, 500, 'WATCH_CONTEXT_FETCH_FAILED', 'Failed to load watch context', error.message);
+  const id = Number(req.params.id);
+  const ep = Number(req.query.ep || 1);
+  if (!Number.isFinite(id) || id <= 0) return sendError(res, req, 400, 'INVALID_ANIME_ID', 'Invalid anime id');
+  const safeEp = Number.isFinite(ep) && ep > 0 ? Math.floor(ep) : 1;
+  const anime = await resolvePaheAnime(id, req.query);
+  if (!anime) return sendError(res, req, 404, 'ANIME_NOT_FOUND', 'Anime not found');
+  let releasePayload = [];
+  if (anime.session) releasePayload = await paheProxyGet(`/${anime.session}/releases`, { sort: 'episode_asc', page: 1 }).catch(() => []);
+  const episodes = buildPaheEpisodes(anime, releasePayload);
+  const selectedEpisode = episodes.find((row) => Number(row.num) === safeEp) || episodes[0];
+  let play = null;
+  if (anime.session && selectedEpisode?.session) {
+    play = await paheProxyGet(`/play/${anime.session}`, { episodeId: selectedEpisode.session, downloads: false }).catch(() => null);
   }
+  const paheSources = normalizeListPayload(play?.sources || play).filter(Boolean);
+  const streamSources = paheSources
+    .map((source) => ({ ...source, fanSub: source?.fanSub || source?.fansub || 'eng', sourceLang: source?.isDub ? 'dub' : 'sub' }));
+  const trailerEmbed = fallbackSearchEmbed(anime.title);
+  if (!streamSources.length) {
+    streamSources.push({ url: null, isM3U8: false, filename: 'Trailer', embed: trailerEmbed, resolution: 'Trailer', isDub: false, fanSub: 'official' });
+  }
+  res.json({
+    anime,
+    currentEpisode: safeEp,
+    episodes,
+    related: mapPaheRelatedRows(anime.info?.recommendations || []).slice(0, 6).concat(fallbackAnime.filter((item) => item.id !== anime.id)).slice(0, 6),
+    streamProvider: {
+      source: 'paheanime',
+      available: Boolean(streamSources.length),
+      note: paheSources.length ? 'Paheanime stream sources ready' : 'Using official trailer fallback because Paheanime stream source is unavailable.',
+      selectedAnimeSession: anime.session || null,
+      selectedEpisodeSession: selectedEpisode?.session || null,
+      sources: streamSources,
+      downloads: play?.downloads || [],
+      trailer: { embed: trailerEmbed },
+      providers: {
+        subEng: { source: 'paheanime', available: true, count: streamSources.length, note: 'Paheanime source', sources: streamSources },
+        subIndo: { source: 'disabled', available: false, count: 0, note: 'Indonesian subtitles are not enabled.', sources: [] }
+      }
+    }
+  });
 });
 
 app.use(express.static(frontendRoot));
 app.get('*', (_req, res) => res.sendFile(path.join(frontendRoot, 'home.html')));
 
-const server = app.listen(PORT, HOST, () => {
-  console.log(`KuroStream running on http://${HOST}:${PORT}`);
-});
+let server = null;
+if (!process.env.VERCEL) {
+  server = app.listen(PORT, HOST, () => {
+    console.log(`KuroStream running on http://${HOST}:${PORT}`);
+  });
+}
+
+export default app;
 
 function shutdown(signal) {
   console.log(JSON.stringify({ level: 'info', event: 'shutdown_start', signal }));
@@ -933,4 +937,3 @@ function shutdown(signal) {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-setInterval(cleanupExpiredJikanCache, 60_000).unref();

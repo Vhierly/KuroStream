@@ -14,18 +14,18 @@
 </head>
 <body>
   <main class="app-shell">
-    <header class="topbar">
+<header class="topbar">
       <div class="brand">Kuro<span>Stream</span></div>
       <nav class="nav">
-        <a href="home.html">Home</a>
+        <a href="index.html">Home</a>
         <a href="explore.html">Explore</a>
         <a href="detail.html">Details</a>
         <a href="watch.html">Watch</a>
         <a href="my-list.html">My List</a>
-              <a id="auth-badge" href="login.html">Login</a>
+        <a id="auth-badge" href="login.html">Login</a>
       </nav>
       <label class="search">
-        <span>🔎</span>
+        <span>⌕</span>
         <input id="global-search" placeholder="Search anime...">
       </label>
     </header>
@@ -81,7 +81,17 @@
               </div>
             </div>
           </article>
-        `}).join("") : `<p class="muted">My List masih kosong. Tambahkan anime dulu dari halaman detail/home.</p>`;
+        `}).join("") : `
+          <article class="empty-state">
+            <div class="empty-icon">＋</div>
+            <h2>${state === 'all' ? 'Your list is empty' : state === 'ongoing' ? 'No anime currently watching' : 'No completed anime yet'}</h2>
+            <p class="muted">Save anime from Home or Details pages. Titles you save will appear here.</p>
+            <div class="row">
+              <a class="btn primary" href="explore.html">Explore Anime</a>
+              <a class="btn" href="index.html">Go Home</a>
+            </div>
+          </article>
+        `;
 
         document.querySelectorAll("[data-watch]").forEach((button) => {
           button.onclick = () => location.href = `watch.html?id=${button.dataset.watch}&ep=${button.dataset.ep || 1}`;
